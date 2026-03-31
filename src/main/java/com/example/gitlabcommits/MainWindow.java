@@ -18,8 +18,8 @@ public class MainWindow extends JFrame {
     private final AppConfig config;
     private final ProjectNameResolver nameResolver = new ProjectNameResolver();
 
-    private final HistoryComboBox hostCombo;
     private final HistoryComboBox tokenCombo;
+    private final HistoryComboBox hostCombo;
     private final HistoryComboBox segmentCombo;
     private final HistoryComboBox projectIdsCombo;
     private final JTextField      projectNamesField;
@@ -52,15 +52,15 @@ public class MainWindow extends JFrame {
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setMinimumSize(new Dimension(860, 700));
 
-        List<String> hosts = config.getHosts();
-        String firstHost = hosts.isEmpty() ? "http://10.1.5.6" : hosts.get(0);
+        List<String> tokens = config.getTokens();
+        String firstToken = tokens.isEmpty() ? "" : tokens.get(0);
 
-        hostCombo       = new HistoryComboBox(hosts, firstHost);
-        tokenCombo      = new HistoryComboBox(config.getList(firstHost, "token"),      "");
-        segmentCombo    = new HistoryComboBox(config.getList(firstHost, "segment"),    "Полигон");
-        projectIdsCombo = new HistoryComboBox(config.getList(firstHost, "projectIds"), "153");
-        sinceCombo      = new HistoryComboBox(config.getList(firstHost, "since"),      "2025-10-01T00:00:01Z");
-        untilCombo      = new HistoryComboBox(config.getList(firstHost, "until"),      "2025-11-01T00:00:01Z");
+        tokenCombo      = new HistoryComboBox(tokens, firstToken);
+        hostCombo       = new HistoryComboBox(config.getList(firstToken, "host"),       "http://10.1.5.6");
+        segmentCombo    = new HistoryComboBox(config.getList(firstToken, "segment"),    "Полигон");
+        projectIdsCombo = new HistoryComboBox(config.getList(firstToken, "projectIds"), "153");
+        sinceCombo      = new HistoryComboBox(config.getList(firstToken, "since"),      "2025-10-01T00:00:01Z");
+        untilCombo      = new HistoryComboBox(config.getList(firstToken, "until"),      "2025-11-01T00:00:01Z");
 
         projectNamesField = new JTextField("");
         projectNamesField.setEditable(false);
@@ -68,10 +68,12 @@ public class MainWindow extends JFrame {
         projectNamesField.setFont(projectNamesField.getFont().deriveFont(Font.BOLD));
         projectNamesField.setToolTipText("Имена проектов разрешаются автоматически");
 
-        hostCombo.addItemListener(e -> {
-            if (e.getStateChange() == ItemEvent.SELECTED) reloadCombos(hostCombo.getCurrentValue());
+        // When token changes — reload all other combos
+        tokenCombo.addItemListener(e -> {
+            if (e.getStateChange() == ItemEvent.SELECTED) reloadCombos(tokenCombo.getCurrentValue());
         });
 
+        // When project IDs change — schedule name lookup
         JTextField idsEditor = (JTextField) projectIdsCombo.getEditor().getEditorComponent();
         idsEditor.getDocument().addDocumentListener(new DocumentListener() {
             public void insertUpdate(DocumentEvent e)  { scheduleNameLookup(); }
@@ -86,8 +88,8 @@ public class MainWindow extends JFrame {
         JPanel form = new JPanel(new GridBagLayout());
         form.setBorder(new EmptyBorder(12, 12, 8, 12));
         int row = 0;
-        addRow(form, row++, "GitLab Host:",                 hostCombo);
         addRow(form, row++, "Token:",                       tokenCombo);
+        addRow(form, row++, "GitLab Host:",                 hostCombo);
         addRow(form, row++, "Segment:",                     segmentCombo);
         addRow(form, row++, "Project IDs (через запятую):",  projectIdsCombo);
         addRow(form, row++, "Project Names:",                projectNamesField);
@@ -254,15 +256,15 @@ public class MainWindow extends JFrame {
     }
 
     // -----------------------------------------------------------------------
-    // Combos reload
+    // Combos reload (triggered by token change)
     // -----------------------------------------------------------------------
 
-    private void reloadCombos(String host) {
-        reloadCombo(tokenCombo,      config.getList(host, "token"),      "");
-        reloadCombo(segmentCombo,    config.getList(host, "segment"),     "Полигон");
-        reloadCombo(projectIdsCombo, config.getList(host, "projectIds"),  "153");
-        reloadCombo(sinceCombo,      config.getList(host, "since"),       "2025-10-01T00:00:01Z");
-        reloadCombo(untilCombo,      config.getList(host, "until"),       "2025-11-01T00:00:01Z");
+    private void reloadCombos(String token) {
+        reloadCombo(hostCombo,       config.getList(token, "host"),       "http://10.1.5.6");
+        reloadCombo(segmentCombo,    config.getList(token, "segment"),     "Полигон");
+        reloadCombo(projectIdsCombo, config.getList(token, "projectIds"),  "153");
+        reloadCombo(sinceCombo,      config.getList(token, "since"),       "2025-10-01T00:00:01Z");
+        reloadCombo(untilCombo,      config.getList(token, "until"),       "2025-11-01T00:00:01Z");
         scheduleNameLookup();
     }
 
@@ -278,8 +280,8 @@ public class MainWindow extends JFrame {
     // -----------------------------------------------------------------------
 
     private void runFetch() {
-        String host       = hostCombo.getCurrentValue();
         String token      = tokenCombo.getCurrentValue();
+        String host       = hostCombo.getCurrentValue();
         String segment    = segmentCombo.getCurrentValue();
         String projectStr = projectIdsCombo.getCurrentValue();
         String since      = sinceCombo.getCurrentValue();
@@ -304,14 +306,14 @@ public class MainWindow extends JFrame {
             return;
         }
 
-        // Persist
-        config.addHost(host);
-        hostCombo.pushValue(host);
-        saveCombo(host, "token",      tokenCombo,      token);
-        saveCombo(host, "segment",    segmentCombo,    segment);
-        saveCombo(host, "projectIds", projectIdsCombo, projectStr);
-        saveCombo(host, "since",      sinceCombo,      since);
-        saveCombo(host, "until",      untilCombo,      until);
+        // Persist — group by token
+        config.addToken(token);
+        tokenCombo.pushValue(token);
+        saveCombo(token, "host",       hostCombo,       host);
+        saveCombo(token, "segment",    segmentCombo,    segment);
+        saveCombo(token, "projectIds", projectIdsCombo, projectStr);
+        saveCombo(token, "since",      sinceCombo,      since);
+        saveCombo(token, "until",      untilCombo,      until);
         config.save();
 
         // UI reset -> log mode
@@ -378,9 +380,9 @@ public class MainWindow extends JFrame {
     // Helpers
     // -----------------------------------------------------------------------
 
-    private void saveCombo(String host, String key, HistoryComboBox combo, String currentValue) {
+    private void saveCombo(String token, String key, HistoryComboBox combo, String currentValue) {
         combo.pushValue(currentValue);
-        config.setList(host, key, currentValue, combo.getAllItems());
+        config.setList(token, key, currentValue, combo.getAllItems());
     }
 
     private void copyToClipboard() {

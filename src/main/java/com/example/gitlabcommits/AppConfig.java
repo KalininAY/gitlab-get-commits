@@ -12,10 +12,10 @@ import java.util.*;
 /**
  * JSON-based config. Structure:
  * {
- *   "hosts": ["http://...", "https://..."],
- *   "hostData": {
- *     "http://10.1.5.6": {
- *       "token":      ["tok1", "tok2"],
+ *   "tokens": ["tok1", "tok2"],
+ *   "tokenData": {
+ *     "tok1": {
+ *       "host":       ["http://10.1.5.6"],
  *       "segment":    ["Полигон"],
  *       "since":      ["2025-10-01T00:00:01Z"],
  *       "until":      ["2025-11-01T00:00:01Z"],
@@ -50,8 +50,8 @@ public class AppConfig {
         } else {
             root = mapper.createObjectNode();
         }
-        if (!root.has("hosts"))    root.set("hosts",    mapper.createArrayNode());
-        if (!root.has("hostData")) root.set("hostData", mapper.createObjectNode());
+        if (!root.has("tokens"))    root.set("tokens",    mapper.createArrayNode());
+        if (!root.has("tokenData")) root.set("tokenData", mapper.createObjectNode());
     }
 
     public void save() {
@@ -62,45 +62,53 @@ public class AppConfig {
         }
     }
 
-    // --- Hosts ---
+    // --- Tokens ---
 
-    public List<String> getHosts() {
+    public List<String> getTokens() {
         List<String> list = new ArrayList<>();
-        root.get("hosts").forEach(n -> list.add(n.asText()));
+        root.get("tokens").forEach(n -> list.add(n.asText()));
         return list;
     }
 
-    public void addHost(String host) {
-        ArrayNode arr = (ArrayNode) root.get("hosts");
-        for (com.fasterxml.jackson.databind.JsonNode n : arr) {
-            if (n.asText().equals(host)) return;
+    public void addToken(String token) {
+        if (token == null || token.isEmpty()) return;
+        ArrayNode arr = (ArrayNode) root.get("tokens");
+        // move to front if already exists
+        for (int i = 0; i < arr.size(); i++) {
+            if (arr.get(i).asText().equals(token)) {
+                arr.remove(i);
+                break;
+            }
         }
-        arr.add(host);
+        ArrayNode newArr = mapper.createArrayNode();
+        newArr.add(token);
+        arr.forEach(newArr::add);
+        root.set("tokens", newArr);
     }
 
-    // --- Per-host data ---
+    // --- Per-token data ---
 
-    private ObjectNode hostNode(String host) {
-        ObjectNode hd = (ObjectNode) root.get("hostData");
-        if (!hd.has(host)) hd.set(host, mapper.createObjectNode());
-        return (ObjectNode) hd.get(host);
+    private ObjectNode tokenNode(String token) {
+        ObjectNode td = (ObjectNode) root.get("tokenData");
+        if (!td.has(token)) td.set(token, mapper.createObjectNode());
+        return (ObjectNode) td.get(token);
     }
 
     /** Returns list of remembered values for a combo field (first = last used) */
-    public List<String> getList(String host, String key) {
+    public List<String> getList(String token, String key) {
         List<String> list = new ArrayList<>();
-        com.fasterxml.jackson.databind.JsonNode n = hostNode(host).get(key);
+        com.fasterxml.jackson.databind.JsonNode n = tokenNode(token).get(key);
         if (n != null && n.isArray()) n.forEach(e -> list.add(e.asText()));
         return list;
     }
 
     /** Saves the list, current value goes to position 0 */
-    public void setList(String host, String key, String currentValue, List<String> allValues) {
+    public void setList(String token, String key, String currentValue, List<String> allValues) {
         ArrayNode arr = mapper.createArrayNode();
         arr.add(currentValue);
         for (String v : allValues) {
             if (!v.equals(currentValue)) arr.add(v);
         }
-        hostNode(host).set(key, arr);
+        tokenNode(token).set(key, arr);
     }
 }
