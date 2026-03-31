@@ -13,7 +13,8 @@ repositories {
 }
 
 dependencies {
-    implementation 'org.gitlab4j:gitlab4j-api:6.0.0-rc.5'
+    // Last version compatible with Java 8; 6.x requires Java 11+
+    implementation 'org.gitlab4j:gitlab4j-api:5.8.0'
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.0'
 }
 
@@ -29,7 +30,7 @@ jar {
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
-// Fat jar — everything bundled, runnable with: java -jar build/libs/gitlab-get-commits-all.jar
+// Fat jar — everything bundled, runnable with: java -jar build/libs/gitlab-get-commits-1.0.0-all.jar
 tasks.register('fatJar', Jar) {
     group       = 'build'
     description = 'Assembles a runnable jar with all runtime dependencies included'
@@ -46,7 +47,6 @@ tasks.register('fatJar', Jar) {
         configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
     }
 
-    // Exclude module-info and signature files that can cause issues
     exclude 'META-INF/*.SF'
     exclude 'META-INF/*.DSA'
     exclude 'META-INF/*.RSA'
@@ -54,5 +54,4 @@ tasks.register('fatJar', Jar) {
     exclude 'module-info.class'
 }
 
-// Make 'assemble' also build the fat jar
 assemble.dependsOn fatJar
