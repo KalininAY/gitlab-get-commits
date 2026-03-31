@@ -21,17 +21,16 @@ public class MainWindow extends JFrame {
     private final HistoryComboBox tokenCombo;
     private final HistoryComboBox segmentCombo;
     private final HistoryComboBox projectIdsCombo;
-    private final JTextField      projectNamesField;  // read-only, shows resolved names
+    private final JTextField      projectNamesField;
     private final HistoryComboBox sinceCombo;
     private final HistoryComboBox untilCombo;
 
-    private final JTextArea   outputArea;
-    private final JButton     runButton;
-    private final JButton     copyButton;
-    private final JLabel      statusLabel;
+    private final JTextArea    outputArea;
+    private final JButton      runButton;
+    private final JButton      copyButton;
+    private final JLabel       statusLabel;
     private final JProgressBar progressBar;
 
-    // Debounce: cancel previous lookup when user keeps typing
     private ScheduledFuture<?> pendingLookup;
     private final ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r); t.setDaemon(true); return t; });
@@ -56,25 +55,19 @@ public class MainWindow extends JFrame {
         projectNamesField = new JTextField("");
         projectNamesField.setEditable(false);
         projectNamesField.setForeground(new Color(80, 80, 80));
-        projectNamesField.setBackground(UIManager.getColor("TextField.background"));
         projectNamesField.setFont(projectNamesField.getFont().deriveFont(Font.ITALIC));
         projectNamesField.setToolTipText("Имена проектов разрешаются автоматически");
 
-        // When host is selected from dropdown, reload all other combos
         hostCombo.addItemListener(e -> {
-            if (e.getStateChange() == ItemEvent.SELECTED) {
-                reloadCombos(hostCombo.getCurrentValue());
-            }
+            if (e.getStateChange() == ItemEvent.SELECTED) reloadCombos(hostCombo.getCurrentValue());
         });
 
-        // Listen to edits in projectIdsCombo editor — debounced name lookup
         JTextField idsEditor = (JTextField) projectIdsCombo.getEditor().getEditorComponent();
         idsEditor.getDocument().addDocumentListener(new DocumentListener() {
             public void insertUpdate(DocumentEvent e)  { scheduleNameLookup(); }
             public void removeUpdate(DocumentEvent e)  { scheduleNameLookup(); }
             public void changedUpdate(DocumentEvent e) { scheduleNameLookup(); }
         });
-        // Also when user selects a saved item from the dropdown
         projectIdsCombo.addItemListener(e -> {
             if (e.getStateChange() == ItemEvent.SELECTED) scheduleNameLookup();
         });
@@ -91,7 +84,6 @@ public class MainWindow extends JFrame {
         addRow(form, row++, "Since (ISO 8601):",             sinceCombo);
         addRow(form, row++, "Until (ISO 8601):",             untilCombo);
 
-        // Trigger initial lookup if IDs already filled
         scheduleNameLookup();
 
         // Buttons
@@ -111,13 +103,13 @@ public class MainWindow extends JFrame {
         btnPanel.add(clearButton);
         btnPanel.add(statusLabel);
 
-        // Progress bar
-        progressBar = new JProgressBar();
+        // Progress bar — determinate, max is updated dynamically
+        progressBar = new JProgressBar(0, 1);
         progressBar.setIndeterminate(false);
         progressBar.setStringPainted(true);
         progressBar.setString("");
         progressBar.setVisible(false);
-        progressBar.setPreferredSize(new Dimension(0, 20));
+        progressBar.setPreferredSize(new Dimension(0, 22));
 
         // Output area
         outputArea = new JTextArea();
@@ -140,18 +132,40 @@ public class MainWindow extends JFrame {
     }
 
     // -----------------------------------------------------------------------
+    // Progress bar update — called from any thread
+    // -----------------------------------------------------------------------
+
+    /**
+     * Update progress bar with current counters.
+     * Both done and total may increase over time as new work is discovered.
+     * Fill = done/total (if total>0), else indeterminate pulse.
+     */
+    private void updateProgress(int done, int total) {
+        SwingUtilities.invokeLater(() -> {
+            if (total == 0) {
+                progressBar.setIndeterminate(true);
+                progressBar.setString("считаю...");
+            } else {
+                progressBar.setIndeterminate(false);
+                progressBar.setMaximum(total);
+                progressBar.setValue(done);
+                progressBar.setString(done + " / " + total);
+            }
+        });
+    }
+
+    // -----------------------------------------------------------------------
     // Project name lookup
     // -----------------------------------------------------------------------
 
-    /** Schedule a name-lookup 600 ms after the last keystroke */
     private void scheduleNameLookup() {
         if (pendingLookup != null && !pendingLookup.isDone()) pendingLookup.cancel(false);
         pendingLookup = scheduler.schedule(this::doNameLookup, 600, TimeUnit.MILLISECONDS);
     }
 
     private void doNameLookup() {
-        String host  = hostCombo.getCurrentValue();
-        String token = tokenCombo.getCurrentValue();
+        String host   = hostCombo.getCurrentValue();
+        String token  = tokenCombo.getCurrentValue();
         String idsStr = projectIdsCombo.getCurrentValue();
 
         if (host.isEmpty() || token.isEmpty() || idsStr.isEmpty()) {
@@ -251,32 +265,35 @@ public class MainWindow extends JFrame {
         saveCombo(host, "until",      untilCombo,      until);
         config.save();
 
-        // UI
+        // UI reset
         runButton.setEnabled(false);
         copyButton.setEnabled(false);
         outputArea.setText("");
-        progressBar.setVisible(true);
-        progressBar.setIndeterminate(true);
-        progressBar.setString("Инициализация...");
         statusLabel.setText(" ");
+        progressBar.setMaximum(1);
+        progressBar.setValue(0);
+        progressBar.setIndeterminate(true);
+        progressBar.setString("считаю...");
+        progressBar.setVisible(true);
 
         GitLabService service = new GitLabService(host, token, segment, since, until,
-                msg -> SwingUtilities.invokeLater(() -> progressBar.setString(msg)));
+                (done, total) -> updateProgress(done, total));
 
         service.fetchProjects(projectIds)
                 .thenAccept(commits -> SwingUtilities.invokeLater(() -> {
+                    int n = commits.size();
                     progressBar.setIndeterminate(false);
-                    progressBar.setValue(100);
-                    if (commits.isEmpty()) {
-                        progressBar.setString("Готово — 0 коммитов");
+                    progressBar.setMaximum(Math.max(1, progressBar.getMaximum()));
+                    progressBar.setValue(progressBar.getMaximum());
+                    progressBar.setString("Готово — найдено " + n + " коммитов");
+                    if (n == 0) {
                         statusLabel.setText("Коммитов не найдено");
                     } else {
                         String csv = commits.stream()
                                 .map(CommitDetail::toCsvRow)
                                 .collect(Collectors.joining("\n"));
                         outputArea.setText(csv);
-                        progressBar.setString("Готово — " + commits.size() + " коммитов");
-                        statusLabel.setText("Найдено: " + commits.size());
+                        statusLabel.setText("Найдено: " + n);
                     }
                     runButton.setEnabled(true);
                     copyButton.setEnabled(true);
@@ -285,7 +302,8 @@ public class MainWindow extends JFrame {
                     SwingUtilities.invokeLater(() -> {
                         progressBar.setIndeterminate(false);
                         progressBar.setString("Ошибка");
-                        statusLabel.setText("Ошибка: " + (ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage()));
+                        statusLabel.setText("Ошибка: " +
+                                (ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage()));
                         runButton.setEnabled(true);
                     });
                     return null;

@@ -6,7 +6,8 @@ import org.gitlab4j.api.models.*;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.function.Consumer;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 
 public class GitLabService {
 
@@ -14,15 +15,25 @@ public class GitLabService {
     private final String segment;
     private final String since;
     private final String until;
-    private final Consumer<String> statusCallback;
+
+    /**
+     * Progress callback: (done, total)
+     * Both numbers may grow over time as more work is discovered.
+     */
+    private final BiConsumer<Integer, Integer> progressCallback;
+
+    // Shared atomic counters across all concurrent project fetches
+    private final AtomicInteger done  = new AtomicInteger(0);
+    private final AtomicInteger total = new AtomicInteger(0);
 
     public GitLabService(String host, String token, String segment,
-                         String since, String until, Consumer<String> statusCallback) {
+                         String since, String until,
+                         BiConsumer<Integer, Integer> progressCallback) {
         this.api = new GitLabApi(host, token);
         this.segment = segment;
         this.since = since;
         this.until = until;
-        this.statusCallback = statusCallback;
+        this.progressCallback = progressCallback;
     }
 
     /** Fetch commits for all given project IDs concurrently, deduplicated across projects */
@@ -47,8 +58,6 @@ public class GitLabService {
                 Project project = api.getProjectApi().getProject(projectId);
                 String projectName = project.getName();
 
-                statusCallback.accept("[" + projectName + "] загрузка...");
-
                 Map<String, CommitDetail> unique = new ConcurrentHashMap<>();
 
                 Date sinceDate = Date.from(Instant.parse(since));
@@ -57,57 +66,67 @@ public class GitLabService {
                 CommitsApi commitsApi = api.getCommitsApi();
 
                 // Branch 1: direct commits in date range, all branches, withStats=true
-                // Signature: getCommits(Object, String ref, Date since, Date until, String path,
-                //                       Boolean all, Boolean withStats, Boolean firstParent)
                 List<Commit> directCommits = commitsApi.getCommits(
                         (Object) projectId, null, sinceDate, untilDate, null,
                         Boolean.TRUE, Boolean.TRUE, Boolean.FALSE
                 );
 
-                List<CompletableFuture<Void>> detailFutures = new ArrayList<>();
+                // Count direct commits as "known work"
+                total.addAndGet(directCommits.size());
+                fireProgress();
 
                 for (Commit c : directCommits) {
-                    final CommitDetail cd = toDetail(c, segment, projectName);
-                    if (cd != null) {
-                        unique.put(cd.id(), cd);
-                    }
+                    CommitDetail cd = toDetail(c, segment, projectName);
+                    if (cd != null) unique.put(cd.id(), cd);
+                    done.incrementAndGet();
+                    fireProgress();
                 }
 
                 // Branch 2: commits from all merge requests
-                // MR commits do NOT return stats — need individual getCommit call
-                // Signature: getCommit(Object projectIdOrPath, String sha)
                 List<MergeRequest> mrs = api.getMergeRequestApi()
                         .getMergeRequests(projectId, Constants.MergeRequestState.ALL, 1, 100);
 
+                // Collect MR commits first to know the total before firing async requests
+                List<String> mrShas = new ArrayList<>();
                 for (MergeRequest mr : mrs) {
                     List<Commit> mrCommits = api.getMergeRequestApi()
                             .getCommits(projectId, mr.getIid(), 1, 100);
-                    for (Commit c : mrCommits) {
-                        final String sha = c.getId();
-                        detailFutures.add(CompletableFuture.runAsync(() -> {
-                            try {
-                                // getCommit(Object, String) — stats are included by default
-                                Commit detail = commitsApi.getCommit((Object) projectId, sha);
-                                CommitDetail cd = toDetail(detail, segment, projectName);
-                                if (cd != null) unique.put(cd.id(), cd);
-                            } catch (Exception e) {
-                                System.err.println("Error fetching commit " + sha + ": " + e.getMessage());
-                            }
-                        }));
-                    }
+                    for (Commit c : mrCommits) mrShas.add(c.getId());
+                }
+
+                // Add MR commits to total (some may overlap with direct; dedup happens at end)
+                total.addAndGet(mrShas.size());
+                fireProgress();
+
+                List<CompletableFuture<Void>> detailFutures = new ArrayList<>();
+                for (String sha : mrShas) {
+                    detailFutures.add(CompletableFuture.runAsync(() -> {
+                        try {
+                            Commit detail = commitsApi.getCommit((Object) projectId, sha);
+                            CommitDetail cd = toDetail(detail, segment, projectName);
+                            if (cd != null) unique.put(cd.id(), cd);
+                        } catch (Exception e) {
+                            System.err.println("Error fetching commit " + sha + ": " + e.getMessage());
+                        } finally {
+                            done.incrementAndGet();
+                            fireProgress();
+                        }
+                    }));
                 }
 
                 CompletableFuture.allOf(detailFutures.toArray(new CompletableFuture[0])).join();
 
-                statusCallback.accept("[" + projectName + "] готово: " + unique.size() + " коммитов");
                 return new ArrayList<>(unique.values());
 
             } catch (Exception e) {
-                statusCallback.accept("Ошибка проекта " + projectId + ": " + e.getMessage());
                 System.err.println("Project " + projectId + " error: " + e.getMessage());
                 return Collections.emptyList();
             }
         });
+    }
+
+    private void fireProgress() {
+        progressCallback.accept(done.get(), total.get());
     }
 
     private CommitDetail toDetail(Commit c, String segment, String projectName) {
