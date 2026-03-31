@@ -78,27 +78,36 @@ public class GitLabService {
                 Date sinceDate = Date.from(Instant.parse(since));
                 Date untilDate = Date.from(Instant.parse(until));
 
-                // ---- Phase 1: direct commits (ALL pages) ----
-                // Signature: getCommits(Object, refName, since, until, path, withStats, withTrailers, firstParent, pageSize) -> Pager
-                // refName=null means all branches (equivalent to ?all=true in the JS version)
+                // ---- Phase 1: direct commits in date range, ALL branches (ALL pages) ----
+                //
+                // Signature (gitlab4j 5.x):
+                //   getCommits(Object projectIdOrPath,
+                //              String  ref,          <- null = default branch only (unless all=true)
+                //              Date    since,
+                //              Date    until,
+                //              String  path,         <- file path filter, null = no filter
+                //              Boolean all,          <- TRUE = traverse all branches (like ?all=true in JS)
+                //              Boolean withStats,    <- FALSE = stats NOT in list response anyway
+                //              Boolean firstParent,
+                //              int     itemsPerPage) -> Pager<Commit>
                 phaseCallback.accept("[" + projectName + "] прямые коммиты...");
                 List<Commit> directCommits = allPages(
                         commitsApi.getCommits(
                                 (Object) projectId,
-                                null,          // refName – all branches
+                                null,         // ref   – doesn't matter when all=true
                                 sinceDate,
                                 untilDate,
-                                null,          // path filter
-                                Boolean.FALSE, // withStats – list doesn't include stats anyway; fetched per-commit below
-                                Boolean.FALSE, // withTrailers
-                                Boolean.FALSE, // firstParent
+                                null,         // path
+                                Boolean.TRUE, // all   – all branches (equivalent to ?all=true)
+                                Boolean.FALSE,// withStats
+                                Boolean.FALSE,// firstParent
                                 PAGE_SIZE
                         )
                 );
                 total.addAndGet(directCommits.size());
                 fireProgress();
 
-                // Fetch details (with stats) in parallel
+                // Fetch full commit details (includes stats) in parallel
                 List<CompletableFuture<Void>> directDetailFutures = directCommits.stream()
                         .map(c -> CompletableFuture.runAsync(() -> {
                             try {
@@ -115,9 +124,8 @@ public class GitLabService {
                         .collect(Collectors.toList());
                 CompletableFuture.allOf(directDetailFutures.toArray(new CompletableFuture[0])).join();
 
-                // ---- Phase 2: MR commits (ALL pages for both MRs and MR commits) ----
+                // ---- Phase 2: MR commits (ALL pages for MRs and for each MR's commits) ----
                 phaseCallback.accept("[" + projectName + "] MR-списки...");
-                // getMergeRequests(Object, MergeRequestState, pageSize) -> Pager
                 List<MergeRequest> mrs = allPages(
                         api.getMergeRequestApi().getMergeRequests(
                                 (Object) projectId,
@@ -131,7 +139,6 @@ public class GitLabService {
                     final long mrIid = mr.getIid();
                     allMrFutures.add(CompletableFuture.runAsync(() -> {
                         try {
-                            // getCommits(Object, Long, pageSize) -> Pager
                             List<Commit> mrCommits = allPages(
                                     api.getMergeRequestApi().getCommits(
                                             (Object) projectId, mrIid, PAGE_SIZE
@@ -175,7 +182,7 @@ public class GitLabService {
     }
 
     // ------------------------------------------------------------------ //
-    //  Pager helper: collect all pages into a flat list (synchronous)
+    //  Pager helper – collects all pages into a flat list (blocking)
     // ------------------------------------------------------------------ //
 
     private static <T> List<T> allPages(Pager<T> pager) throws GitLabApiException {
@@ -197,6 +204,7 @@ public class GitLabService {
     private CommitDetail toDetail(Commit c, String segment, String projectName) {
         if (c == null || c.getCommittedDate() == null) return null;
         String dateStr = c.getCommittedDate().toInstant().toString();
+        // Secondary date guard: API filters by authored_date; we filter result by committed_date
         if (!isTimeBound(dateStr)) return null;
 
         String msg = c.getMessage() == null ? "" : c.getMessage()
