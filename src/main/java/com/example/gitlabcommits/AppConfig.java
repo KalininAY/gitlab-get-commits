@@ -39,7 +39,7 @@ public class AppConfig {
     }
 
     private void load() {
-        Path path = Path.of(CONFIG_FILE);
+        Path path = Paths.get(CONFIG_FILE);
         if (Files.exists(path)) {
             try {
                 root = (ObjectNode) mapper.readTree(path.toFile());
@@ -72,7 +72,9 @@ public class AppConfig {
 
     public void addHost(String host) {
         ArrayNode arr = (ArrayNode) root.get("hosts");
-        for (var n : arr) if (n.asText().equals(host)) return;
+        for (com.fasterxml.jackson.databind.JsonNode n : arr) {
+            if (n.asText().equals(host)) return;
+        }
         arr.add(host);
     }
 
@@ -87,7 +89,7 @@ public class AppConfig {
     /** Returns list of remembered values for a combo field (first = last used) */
     public List<String> getList(String host, String key) {
         List<String> list = new ArrayList<>();
-        var n = hostNode(host).get(key);
+        com.fasterxml.jackson.databind.JsonNode n = hostNode(host).get(key);
         if (n != null && n.isArray()) n.forEach(e -> list.add(e.asText()));
         return list;
     }
