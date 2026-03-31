@@ -13,14 +13,13 @@ import java.util.function.Consumer;
 public class GitLabService {
 
     private final GitLabApi api;
+    private final String cacheKey;  // "host|token" for UserResolver
     private final String segment;
     private final String since;
     private final String until;
-
-    /** (done, total) — both numbers grow over time */
     private final BiConsumer<Integer, Integer> progressCallback;
-    /** Text phase label shown next to the numbers */
     private final Consumer<String> phaseCallback;
+    private final UserResolver userResolver = new UserResolver();
 
     private final AtomicInteger done  = new AtomicInteger(0);
     private final AtomicInteger total = new AtomicInteger(0);
@@ -30,6 +29,7 @@ public class GitLabService {
                          BiConsumer<Integer, Integer> progressCallback,
                          Consumer<String> phaseCallback) {
         this.api = new GitLabApi(host, token);
+        this.cacheKey = host + "|" + token;
         this.segment = segment;
         this.since = since;
         this.until = until;
@@ -62,7 +62,7 @@ public class GitLabService {
                 Date sinceDate = Date.from(Instant.parse(since));
                 Date untilDate = Date.from(Instant.parse(until));
 
-                // ── Phase 1: direct commits (already include stats) ──────────────
+                // ── Phase 1: direct commits ──────────────────────────────────────
                 phaseCallback.accept("[" + projectName + "] прямые коммиты...");
                 List<Commit> directCommits = commitsApi.getCommits(
                         (Object) projectId, null, sinceDate, untilDate, null,
@@ -77,26 +77,20 @@ public class GitLabService {
                     fireProgress();
                 }
 
-                // ── Phase 2: MR list ─────────────────────────────────────────────
+                // ── Phase 2: MR commits (parallel per MR) ───────────────────────
                 phaseCallback.accept("[" + projectName + "] MR-списки...");
                 List<MergeRequest> mrs = api.getMergeRequestApi()
                         .getMergeRequests(projectId, Constants.MergeRequestState.ALL, 1, 100);
 
-                // Each MR's commits are fetched in parallel; as soon as we know
-                // the SHAs from one MR we add them to total and launch detail requests.
                 List<CompletableFuture<Void>> allMrFutures = new ArrayList<>();
-
                 for (MergeRequest mr : mrs) {
-                    CompletableFuture<Void> mrFuture = CompletableFuture.runAsync(() -> {
+                    allMrFutures.add(CompletableFuture.runAsync(() -> {
                         try {
                             List<Commit> mrCommits = api.getMergeRequestApi()
                                     .getCommits(projectId, mr.getIid(), 1, 100);
-
-                            // Add this MR's commits to total immediately
                             total.addAndGet(mrCommits.size());
                             fireProgress();
 
-                            // Launch parallel detail requests for each SHA
                             List<CompletableFuture<Void>> detailFutures = mrCommits.stream()
                                     .map(c -> c.getId())
                                     .map(sha -> CompletableFuture.runAsync(() -> {
@@ -112,13 +106,11 @@ public class GitLabService {
                                         }
                                     }))
                                     .toList();
-
                             CompletableFuture.allOf(detailFutures.toArray(new CompletableFuture[0])).join();
                         } catch (Exception e) {
                             System.err.println("Error fetching MR " + mr.getIid() + ": " + e.getMessage());
                         }
-                    });
-                    allMrFutures.add(mrFuture);
+                    }));
                 }
 
                 phaseCallback.accept("[" + projectName + "] детали коммитов...");
@@ -154,9 +146,12 @@ public class GitLabService {
             deletions = c.getStats().getDeletions() != null ? c.getStats().getDeletions() : 0;
         }
 
+        // Resolve email -> GitLab username (cached)
+        String username = userResolver.resolve(api, cacheKey, c.getAuthorEmail());
+
         return new CommitDetail(
                 c.getId(), dateStr, msg,
-                c.getAuthorEmail() != null ? c.getAuthorEmail() : "",
+                username,
                 additions, deletions, segment, projectName);
     }
 
