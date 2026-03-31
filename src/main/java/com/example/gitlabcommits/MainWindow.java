@@ -2,36 +2,46 @@ package com.example.gitlabcommits;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import java.awt.*;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.ItemEvent;
 import java.util.*;
 import java.util.List;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 public class MainWindow extends JFrame {
 
     private final AppConfig config;
+    private final ProjectNameResolver nameResolver = new ProjectNameResolver();
 
     private final HistoryComboBox hostCombo;
     private final HistoryComboBox tokenCombo;
     private final HistoryComboBox segmentCombo;
     private final HistoryComboBox projectIdsCombo;
+    private final JTextField      projectNamesField;  // read-only, shows resolved names
     private final HistoryComboBox sinceCombo;
     private final HistoryComboBox untilCombo;
 
-    private final JTextArea outputArea;
-    private final JButton runButton;
-    private final JButton copyButton;
-    private final JLabel statusLabel;
+    private final JTextArea   outputArea;
+    private final JButton     runButton;
+    private final JButton     copyButton;
+    private final JLabel      statusLabel;
     private final JProgressBar progressBar;
+
+    // Debounce: cancel previous lookup when user keeps typing
+    private ScheduledFuture<?> pendingLookup;
+    private final ScheduledExecutorService scheduler =
+            Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r); t.setDaemon(true); return t; });
 
     public MainWindow(AppConfig config) {
         super("GitLab Get Commits");
         this.config = config;
 
         setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setMinimumSize(new Dimension(800, 650));
+        setMinimumSize(new Dimension(800, 680));
 
         List<String> hosts = config.getHosts();
         String firstHost = hosts.isEmpty() ? "http://10.1.5.6" : hosts.get(0);
@@ -43,6 +53,13 @@ public class MainWindow extends JFrame {
         sinceCombo      = new HistoryComboBox(config.getList(firstHost, "since"),      "2025-10-01T00:00:01Z");
         untilCombo      = new HistoryComboBox(config.getList(firstHost, "until"),      "2025-11-01T00:00:01Z");
 
+        projectNamesField = new JTextField("");
+        projectNamesField.setEditable(false);
+        projectNamesField.setForeground(new Color(80, 80, 80));
+        projectNamesField.setBackground(UIManager.getColor("TextField.background"));
+        projectNamesField.setFont(projectNamesField.getFont().deriveFont(Font.ITALIC));
+        projectNamesField.setToolTipText("Имена проектов разрешаются автоматически");
+
         // When host is selected from dropdown, reload all other combos
         hostCombo.addItemListener(e -> {
             if (e.getStateChange() == ItemEvent.SELECTED) {
@@ -50,16 +67,32 @@ public class MainWindow extends JFrame {
             }
         });
 
+        // Listen to edits in projectIdsCombo editor — debounced name lookup
+        JTextField idsEditor = (JTextField) projectIdsCombo.getEditor().getEditorComponent();
+        idsEditor.getDocument().addDocumentListener(new DocumentListener() {
+            public void insertUpdate(DocumentEvent e)  { scheduleNameLookup(); }
+            public void removeUpdate(DocumentEvent e)  { scheduleNameLookup(); }
+            public void changedUpdate(DocumentEvent e) { scheduleNameLookup(); }
+        });
+        // Also when user selects a saved item from the dropdown
+        projectIdsCombo.addItemListener(e -> {
+            if (e.getStateChange() == ItemEvent.SELECTED) scheduleNameLookup();
+        });
+
         // Form
         JPanel form = new JPanel(new GridBagLayout());
         form.setBorder(new EmptyBorder(12, 12, 8, 12));
         int row = 0;
-        addRow(form, row++, "GitLab Host:",                hostCombo);
-        addRow(form, row++, "Token:",                      tokenCombo);
-        addRow(form, row++, "Segment:",                    segmentCombo);
-        addRow(form, row++, "Project IDs (через запятую):", projectIdsCombo);
-        addRow(form, row++, "Since (ISO 8601):",            sinceCombo);
-        addRow(form, row++, "Until (ISO 8601):",            untilCombo);
+        addRow(form, row++, "GitLab Host:",                 hostCombo);
+        addRow(form, row++, "Token:",                       tokenCombo);
+        addRow(form, row++, "Segment:",                     segmentCombo);
+        addRow(form, row++, "Project IDs (через запятую):",  projectIdsCombo);
+        addRow(form, row++, "Project Names:",                projectNamesField);
+        addRow(form, row++, "Since (ISO 8601):",             sinceCombo);
+        addRow(form, row++, "Until (ISO 8601):",             untilCombo);
+
+        // Trigger initial lookup if IDs already filled
+        scheduleNameLookup();
 
         // Buttons
         runButton  = new JButton("Получить коммиты");
@@ -106,12 +139,68 @@ public class MainWindow extends JFrame {
         setLocationRelativeTo(null);
     }
 
+    // -----------------------------------------------------------------------
+    // Project name lookup
+    // -----------------------------------------------------------------------
+
+    /** Schedule a name-lookup 600 ms after the last keystroke */
+    private void scheduleNameLookup() {
+        if (pendingLookup != null && !pendingLookup.isDone()) pendingLookup.cancel(false);
+        pendingLookup = scheduler.schedule(this::doNameLookup, 600, TimeUnit.MILLISECONDS);
+    }
+
+    private void doNameLookup() {
+        String host  = hostCombo.getCurrentValue();
+        String token = tokenCombo.getCurrentValue();
+        String idsStr = projectIdsCombo.getCurrentValue();
+
+        if (host.isEmpty() || token.isEmpty() || idsStr.isEmpty()) {
+            SwingUtilities.invokeLater(() -> projectNamesField.setText(""));
+            return;
+        }
+
+        List<Integer> ids;
+        try {
+            ids = Arrays.stream(idsStr.split("[,;\\s]+"))
+                    .map(String::trim).filter(s -> !s.isEmpty())
+                    .map(Integer::parseInt)
+                    .toList();
+        } catch (NumberFormatException e) {
+            SwingUtilities.invokeLater(() -> projectNamesField.setText("— некорректный ID"));
+            return;
+        }
+
+        if (ids.isEmpty()) {
+            SwingUtilities.invokeLater(() -> projectNamesField.setText(""));
+            return;
+        }
+
+        SwingUtilities.invokeLater(() -> projectNamesField.setText("…"));
+
+        nameResolver.resolve(host, token, ids)
+                .thenAccept(nameMap -> {
+                    String names = ids.stream()
+                            .map(id -> nameMap.getOrDefault(id, "#" + id))
+                            .collect(Collectors.joining(", "));
+                    SwingUtilities.invokeLater(() -> projectNamesField.setText(names));
+                })
+                .exceptionally(ex -> {
+                    SwingUtilities.invokeLater(() -> projectNamesField.setText("— ошибка запроса"));
+                    return null;
+                });
+    }
+
+    // -----------------------------------------------------------------------
+    // Combos reload
+    // -----------------------------------------------------------------------
+
     private void reloadCombos(String host) {
         reloadCombo(tokenCombo,      config.getList(host, "token"),      "");
         reloadCombo(segmentCombo,    config.getList(host, "segment"),     "Полигон");
         reloadCombo(projectIdsCombo, config.getList(host, "projectIds"),  "153");
         reloadCombo(sinceCombo,      config.getList(host, "since"),       "2025-10-01T00:00:01Z");
         reloadCombo(untilCombo,      config.getList(host, "until"),       "2025-11-01T00:00:01Z");
+        scheduleNameLookup();
     }
 
     private void reloadCombo(HistoryComboBox combo, List<String> items, String def) {
@@ -120,6 +209,10 @@ public class MainWindow extends JFrame {
         if (items.isEmpty() && !def.isEmpty()) combo.addItem(def);
         if (combo.getItemCount() > 0) combo.setSelectedIndex(0);
     }
+
+    // -----------------------------------------------------------------------
+    // Main fetch
+    // -----------------------------------------------------------------------
 
     private void runFetch() {
         String host       = hostCombo.getCurrentValue();
@@ -198,6 +291,10 @@ public class MainWindow extends JFrame {
                     return null;
                 });
     }
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
 
     private void saveCombo(String host, String key, HistoryComboBox combo, String currentValue) {
         combo.pushValue(currentValue);
