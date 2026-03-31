@@ -2,6 +2,7 @@ package com.example.gitlabcommits;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
+import javax.swing.border.TitledBorder;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import java.awt.*;
@@ -30,7 +31,10 @@ public class MainWindow extends JFrame {
     private final JButton      copyButton;
     private final JLabel       statusLabel;
     private final JProgressBar progressBar;
-    private final JLabel       phaseLabel;   // текстовая фаза рядом с шкалой
+    private final JLabel       phaseLabel;
+
+    // Holds CSV when done, null while running (log mode)
+    private String csvResult = null;
 
     private ScheduledFuture<?> pendingLookup;
     private final ScheduledExecutorService scheduler =
@@ -100,7 +104,7 @@ public class MainWindow extends JFrame {
         btnPanel.add(clearButton);
         btnPanel.add(statusLabel);
 
-        // Progress panel: [bar] [phase label]
+        // Progress panel
         progressBar = new JProgressBar(0, 1);
         progressBar.setStringPainted(true);
         progressBar.setString("");
@@ -115,7 +119,7 @@ public class MainWindow extends JFrame {
         progressPanel.add(phaseLabel,  BorderLayout.EAST);
         progressPanel.setVisible(false);
 
-        // Output area
+        // Output area — title changes dynamically
         outputArea = new JTextArea();
         outputArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         outputArea.setLineWrap(false);
@@ -124,7 +128,12 @@ public class MainWindow extends JFrame {
 
         runButton.addActionListener(e  -> runFetch());
         copyButton.addActionListener(e -> copyToClipboard());
-        clearButton.addActionListener(e -> { outputArea.setText(""); statusLabel.setText(" "); });
+        clearButton.addActionListener(e -> {
+            csvResult = null;
+            outputArea.setText("");
+            statusLabel.setText(" ");
+            setOutputTitle("Результат (CSV)");
+        });
 
         JPanel top = new JPanel(new BorderLayout(0, 2));
         top.add(progressPanel, BorderLayout.NORTH);
@@ -137,6 +146,31 @@ public class MainWindow extends JFrame {
 
         pack();
         setLocationRelativeTo(null);
+    }
+
+    // -----------------------------------------------------------------------
+    // Output area title
+    // -----------------------------------------------------------------------
+
+    private void setOutputTitle(String title) {
+        Container parent = outputArea.getParent();
+        while (parent != null && !(parent instanceof JScrollPane)) parent = parent.getParent();
+        if (parent instanceof JScrollPane sp && sp.getBorder() instanceof TitledBorder tb) {
+            tb.setTitle(title);
+            sp.repaint();
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Log helpers (called from background threads)
+    // -----------------------------------------------------------------------
+
+    private void appendLog(String line) {
+        SwingUtilities.invokeLater(() -> {
+            if (csvResult != null) return; // already finished, don't overwrite
+            outputArea.append(line + "\n");
+            outputArea.setCaretPosition(outputArea.getDocument().getLength());
+        });
     }
 
     // -----------------------------------------------------------------------
@@ -162,6 +196,7 @@ public class MainWindow extends JFrame {
     }
 
     private void updatePhase(String phase) {
+        appendLog(phase);
         SwingUtilities.invokeLater(() -> phaseLabel.setText(phase));
     }
 
@@ -276,7 +311,8 @@ public class MainWindow extends JFrame {
         saveCombo(host, "until",      untilCombo,      until);
         config.save();
 
-        // UI reset
+        // UI reset → log mode
+        csvResult = null;
         runButton.setEnabled(false);
         copyButton.setEnabled(false);
         outputArea.setText("");
@@ -287,6 +323,7 @@ public class MainWindow extends JFrame {
         progressBar.setString("считаю...");
         phaseLabel.setText("");
         getProgressPanel().setVisible(true);
+        setOutputTitle("Лог выполнения");
 
         GitLabService service = new GitLabService(
                 host, token, segment, since, until,
@@ -301,16 +338,21 @@ public class MainWindow extends JFrame {
                     progressBar.setValue(progressBar.getMaximum());
                     progressBar.setString("Готово — " + n + " коммитов");
                     phaseLabel.setText("");
+
                     if (n == 0) {
                         statusLabel.setText("Коммитов не найдено");
+                        setOutputTitle("Результат (CSV)");
                     } else {
                         String csv = commits.stream()
-                                .sorted(Comparator.comparing(CommitDetail::projectName))
-                                .sorted(Comparator.comparing(CommitDetail::projectName))
+                                .sorted(Comparator.comparing(CommitDetail::projectName)
+                                        .thenComparing(CommitDetail::committedDate))
                                 .map(CommitDetail::toCsvRow)
                                 .collect(Collectors.joining("\n"));
+                        csvResult = csv;
                         outputArea.setText(csv);
+                        outputArea.setCaretPosition(0);
                         statusLabel.setText("Найдено: " + n);
+                        setOutputTitle("Результат (CSV)");
                     }
                     runButton.setEnabled(true);
                     copyButton.setEnabled(true);
@@ -322,6 +364,7 @@ public class MainWindow extends JFrame {
                         phaseLabel.setText("");
                         statusLabel.setText("Ошибка: " +
                                 (ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage()));
+                        setOutputTitle("Лог выполнения");
                         runButton.setEnabled(true);
                     });
                     return null;
