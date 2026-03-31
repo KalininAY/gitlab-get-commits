@@ -32,13 +32,18 @@ public class MainWindow extends JFrame {
     private final JLabel       statusLabel;
     private final JProgressBar progressBar;
     private final JLabel       phaseLabel;
+    private final JScrollPane  outputScroll;
 
     // Holds CSV when done, null while running (log mode)
     private String csvResult = null;
 
     private ScheduledFuture<?> pendingLookup;
     private final ScheduledExecutorService scheduler =
-            Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r); t.setDaemon(true); return t; });
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r);
+                t.setDaemon(true);
+                return t;
+            });
 
     public MainWindow(AppConfig config) {
         super("GitLab Get Commits");
@@ -119,12 +124,12 @@ public class MainWindow extends JFrame {
         progressPanel.add(phaseLabel,  BorderLayout.EAST);
         progressPanel.setVisible(false);
 
-        // Output area — title changes dynamically
+        // Output area
         outputArea = new JTextArea();
         outputArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         outputArea.setLineWrap(false);
-        JScrollPane scroll = new JScrollPane(outputArea);
-        scroll.setBorder(BorderFactory.createTitledBorder("Результат (CSV)"));
+        outputScroll = new JScrollPane(outputArea);
+        outputScroll.setBorder(BorderFactory.createTitledBorder("Результат (CSV)"));
 
         runButton.addActionListener(e  -> runFetch());
         copyButton.addActionListener(e -> copyToClipboard());
@@ -141,8 +146,8 @@ public class MainWindow extends JFrame {
         top.add(btnPanel,      BorderLayout.SOUTH);
 
         setLayout(new BorderLayout(0, 4));
-        add(top,    BorderLayout.NORTH);
-        add(scroll, BorderLayout.CENTER);
+        add(top,         BorderLayout.NORTH);
+        add(outputScroll, BorderLayout.CENTER);
 
         pack();
         setLocationRelativeTo(null);
@@ -153,21 +158,19 @@ public class MainWindow extends JFrame {
     // -----------------------------------------------------------------------
 
     private void setOutputTitle(String title) {
-        Container parent = outputArea.getParent();
-        while (parent != null && !(parent instanceof JScrollPane)) parent = parent.getParent();
-        if (parent instanceof JScrollPane sp && sp.getBorder() instanceof TitledBorder tb) {
-            tb.setTitle(title);
-            sp.repaint();
+        if (outputScroll.getBorder() instanceof TitledBorder) {
+            ((TitledBorder) outputScroll.getBorder()).setTitle(title);
+            outputScroll.repaint();
         }
     }
 
     // -----------------------------------------------------------------------
-    // Log helpers (called from background threads)
+    // Log helpers
     // -----------------------------------------------------------------------
 
     private void appendLog(String line) {
         SwingUtilities.invokeLater(() -> {
-            if (csvResult != null) return; // already finished, don't overwrite
+            if (csvResult != null) return;
             outputArea.append(line + "\n");
             outputArea.setCaretPosition(outputArea.getDocument().getLength());
         });
@@ -224,7 +227,7 @@ public class MainWindow extends JFrame {
             ids = Arrays.stream(idsStr.split("[,;\\s]+"))
                     .map(String::trim).filter(s -> !s.isEmpty())
                     .map(Integer::parseInt)
-                    .toList();
+                    .collect(Collectors.toList());
         } catch (NumberFormatException e) {
             SwingUtilities.invokeLater(() -> projectNamesField.setText("— некорректный ID"));
             return;
@@ -311,7 +314,7 @@ public class MainWindow extends JFrame {
         saveCombo(host, "until",      untilCombo,      until);
         config.save();
 
-        // UI reset → log mode
+        // UI reset -> log mode
         csvResult = null;
         runButton.setEnabled(false);
         copyButton.setEnabled(false);
