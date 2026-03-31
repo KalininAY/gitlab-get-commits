@@ -20,13 +20,15 @@ public class ProjectNameResolver {
         return t;
     });
 
+    private static GitLabApi buildApi(String host, String token) {
+        GitLabApi api = new GitLabApi(host, token);
+        api.setIgnoreCertificateErrors(true);
+        return api;
+    }
+
     /**
      * Resolves names for all given IDs.
      * Already-cached IDs are returned immediately; unknown IDs are fetched async.
-     * @param host       GitLab host URL
-     * @param token      access token
-     * @param projectIds list of project IDs to resolve
-     * @return CompletableFuture with a map id->name (unknown IDs mapped to "#id")
      */
     public CompletableFuture<Map<Integer, String>> resolve(String host, String token, List<Integer> projectIds) {
         String cacheKey = host + "|" + token;
@@ -45,11 +47,12 @@ public class ProjectNameResolver {
         List<CompletableFuture<Void>> fetches = missing.stream()
                 .map(id -> CompletableFuture.runAsync(() -> {
                     try {
-                        GitLabApi api = new GitLabApi(host, token);
+                        GitLabApi api = buildApi(host, token);
                         String name = api.getProjectApi().getProject(id).getName();
                         hostCache.put(id, name);
                     } catch (Exception e) {
                         hostCache.put(id, "#" + id + " (?)");
+                        System.err.println("ProjectNameResolver: project " + id + " error: " + e.getMessage());
                     }
                 }, executor))
                 .collect(Collectors.toList());
@@ -62,7 +65,7 @@ public class ProjectNameResolver {
                 });
     }
 
-    /** Clears the cache for a specific host (call when host or token changes) */
+    /** Clears the cache for a specific host+token pair */
     public void clearCache(String host, String token) {
         cache.remove(host + "|" + token);
     }
