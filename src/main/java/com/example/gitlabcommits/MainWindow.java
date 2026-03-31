@@ -1,6 +1,7 @@
 package com.example.gitlabcommits;
 
 import javax.swing.*;
+import javax.swing.border.Border;
 import javax.swing.border.EmptyBorder;
 import javax.swing.border.TitledBorder;
 import javax.swing.event.DocumentEvent;
@@ -32,18 +33,13 @@ public class MainWindow extends JFrame {
     private final JLabel       statusLabel;
     private final JProgressBar progressBar;
     private final JLabel       phaseLabel;
-    private final JScrollPane  outputScroll;
 
     // Holds CSV when done, null while running (log mode)
     private String csvResult = null;
 
     private ScheduledFuture<?> pendingLookup;
     private final ScheduledExecutorService scheduler =
-            Executors.newSingleThreadScheduledExecutor(r -> {
-                Thread t = new Thread(r);
-                t.setDaemon(true);
-                return t;
-            });
+            Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r); t.setDaemon(true); return t; });
 
     public MainWindow(AppConfig config) {
         super("GitLab Get Commits");
@@ -126,12 +122,12 @@ public class MainWindow extends JFrame {
         progressPanel.add(phaseLabel,  BorderLayout.EAST);
         progressPanel.setVisible(false);
 
-        // Output area
+        // Output area — title changes dynamically
         outputArea = new JTextArea();
         outputArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         outputArea.setLineWrap(false);
-        outputScroll = new JScrollPane(outputArea);
-        outputScroll.setBorder(BorderFactory.createTitledBorder("Результат (CSV)"));
+        JScrollPane scroll = new JScrollPane(outputArea);
+        scroll.setBorder(BorderFactory.createTitledBorder("Результат (CSV)"));
 
         runButton.addActionListener(e  -> runFetch());
         copyButton.addActionListener(e -> copyToClipboard());
@@ -148,8 +144,8 @@ public class MainWindow extends JFrame {
         top.add(btnPanel,      BorderLayout.SOUTH);
 
         setLayout(new BorderLayout(0, 4));
-        add(top,         BorderLayout.NORTH);
-        add(outputScroll, BorderLayout.CENTER);
+        add(top,    BorderLayout.NORTH);
+        add(scroll, BorderLayout.CENTER);
 
         pack();
         setLocationRelativeTo(null);
@@ -160,19 +156,26 @@ public class MainWindow extends JFrame {
     // -----------------------------------------------------------------------
 
     private void setOutputTitle(String title) {
-        if (outputScroll.getBorder() instanceof TitledBorder) {
-            ((TitledBorder) outputScroll.getBorder()).setTitle(title);
-            outputScroll.repaint();
+        Container parent = outputArea.getParent();
+        while (parent != null && !(parent instanceof JScrollPane)) parent = parent.getParent();
+        if (parent instanceof JScrollPane) {
+            JScrollPane sp = (JScrollPane) parent;
+            Border border = sp.getBorder();
+            if (border instanceof TitledBorder) {
+                TitledBorder tb = (TitledBorder) border;
+                tb.setTitle(title);
+                sp.repaint();
+            }
         }
     }
 
     // -----------------------------------------------------------------------
-    // Log helpers
+    // Log helpers (called from background threads)
     // -----------------------------------------------------------------------
 
     private void appendLog(String line) {
         SwingUtilities.invokeLater(() -> {
-            if (csvResult != null) return;
+            if (csvResult != null) return; // already finished, don't overwrite
             outputArea.append(line + "\n");
             outputArea.setCaretPosition(outputArea.getDocument().getLength());
         });
@@ -316,7 +319,7 @@ public class MainWindow extends JFrame {
         saveCombo(token, "until",      untilCombo,      until);
         config.save();
 
-        // UI reset -> log mode
+        // UI reset → log mode
         csvResult = null;
         runButton.setEnabled(false);
         copyButton.setEnabled(false);
