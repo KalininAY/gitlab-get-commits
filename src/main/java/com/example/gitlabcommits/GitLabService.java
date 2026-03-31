@@ -15,14 +15,8 @@ public class GitLabService {
     private final String segment;
     private final String since;
     private final String until;
-
-    /**
-     * Progress callback: (done, total)
-     * Both numbers may grow over time as more work is discovered.
-     */
     private final BiConsumer<Integer, Integer> progressCallback;
 
-    // Shared atomic counters across all concurrent project fetches
     private final AtomicInteger done  = new AtomicInteger(0);
     private final AtomicInteger total = new AtomicInteger(0);
 
@@ -36,7 +30,6 @@ public class GitLabService {
         this.progressCallback = progressCallback;
     }
 
-    /** Fetch commits for all given project IDs concurrently, deduplicated across projects */
     public CompletableFuture<List<CommitDetail>> fetchProjects(List<Integer> projectIds) {
         List<CompletableFuture<List<CommitDetail>>> futures = projectIds.stream()
                 .map(this::fetchProject)
@@ -65,13 +58,11 @@ public class GitLabService {
 
                 CommitsApi commitsApi = api.getCommitsApi();
 
-                // Branch 1: direct commits in date range, all branches, withStats=true
                 List<Commit> directCommits = commitsApi.getCommits(
                         (Object) projectId, null, sinceDate, untilDate, null,
                         Boolean.TRUE, Boolean.TRUE, Boolean.FALSE
                 );
 
-                // Count direct commits as "known work"
                 total.addAndGet(directCommits.size());
                 fireProgress();
 
@@ -82,11 +73,9 @@ public class GitLabService {
                     fireProgress();
                 }
 
-                // Branch 2: commits from all merge requests
                 List<MergeRequest> mrs = api.getMergeRequestApi()
                         .getMergeRequests(projectId, Constants.MergeRequestState.ALL, 1, 100);
 
-                // Collect MR commits first to know the total before firing async requests
                 List<String> mrShas = new ArrayList<>();
                 for (MergeRequest mr : mrs) {
                     List<Commit> mrCommits = api.getMergeRequestApi()
@@ -94,7 +83,6 @@ public class GitLabService {
                     for (Commit c : mrCommits) mrShas.add(c.getId());
                 }
 
-                // Add MR commits to total (some may overlap with direct; dedup happens at end)
                 total.addAndGet(mrShas.size());
                 fireProgress();
 
@@ -146,9 +134,11 @@ public class GitLabService {
             deletions = c.getStats().getDeletions() != null ? c.getStats().getDeletions() : 0;
         }
 
+        String authorEmail = c.getAuthorEmail() != null ? c.getAuthorEmail() : "";
+
         return new CommitDetail(
                 c.getId(), dateStr, msg,
-                c.getCommitterName() != null ? c.getCommitterName() : "",
+                authorEmail,
                 additions, deletions, segment, projectName);
     }
 

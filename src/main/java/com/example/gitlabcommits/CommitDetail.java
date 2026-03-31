@@ -7,7 +7,7 @@ public record CommitDetail(
         String id,
         String committedDate,
         String message,
-        String committerName,
+        String authorEmail,
         int additions,
         int deletions,
         String segment,
@@ -25,7 +25,7 @@ public record CommitDetail(
         }
         String safeMsg = message.replace(";", ",").replace("\n", " ").trim();
         return String.join(";",
-                id, segment, projectName, formattedDate, safeMsg, committerName,
+                id, segment, projectName, formattedDate, safeMsg, authorEmail,
                 String.valueOf(additions), String.valueOf(deletions));
     }
 }
