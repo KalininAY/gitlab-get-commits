@@ -56,26 +56,26 @@ public class GitLabService {
 
                 CommitsApi commitsApi = api.getCommitsApi();
 
-                // Branch 1: direct commits in date range (all branches)
+                // Branch 1: direct commits in date range, all branches, withStats=true
+                // Signature: getCommits(Object, String ref, Date since, Date until, String path,
+                //                       Boolean all, Boolean withStats, Boolean firstParent)
                 List<Commit> directCommits = commitsApi.getCommits(
-                        projectId, null, sinceDate, untilDate, null, true, false, false, 1, 100
+                        (Object) projectId, null, sinceDate, untilDate, null,
+                        Boolean.TRUE, Boolean.TRUE, Boolean.FALSE
                 );
 
                 List<CompletableFuture<Void>> detailFutures = new ArrayList<>();
 
                 for (Commit c : directCommits) {
-                    detailFutures.add(CompletableFuture.runAsync(() -> {
-                        try {
-                            Commit detail = commitsApi.getCommit(projectId, c.getId(), true);
-                            CommitDetail cd = toDetail(detail, segment, projectName);
-                            if (cd != null) unique.put(cd.id(), cd);
-                        } catch (Exception e) {
-                            System.err.println("Error fetching commit " + c.getId() + ": " + e.getMessage());
-                        }
-                    }));
+                    final CommitDetail cd = toDetail(c, segment, projectName);
+                    if (cd != null) {
+                        unique.put(cd.id(), cd);
+                    }
                 }
 
                 // Branch 2: commits from all merge requests
+                // MR commits do NOT return stats — need individual getCommit call
+                // Signature: getCommit(Object projectIdOrPath, String sha)
                 List<MergeRequest> mrs = api.getMergeRequestApi()
                         .getMergeRequests(projectId, Constants.MergeRequestState.ALL, 1, 100);
 
@@ -83,13 +83,15 @@ public class GitLabService {
                     List<Commit> mrCommits = api.getMergeRequestApi()
                             .getCommits(projectId, mr.getIid(), 1, 100);
                     for (Commit c : mrCommits) {
+                        final String sha = c.getId();
                         detailFutures.add(CompletableFuture.runAsync(() -> {
                             try {
-                                Commit detail = commitsApi.getCommit(projectId, c.getId(), true);
+                                // getCommit(Object, String) — stats are included by default
+                                Commit detail = commitsApi.getCommit((Object) projectId, sha);
                                 CommitDetail cd = toDetail(detail, segment, projectName);
                                 if (cd != null) unique.put(cd.id(), cd);
                             } catch (Exception e) {
-                                System.err.println("Error fetching commit " + c.getId() + ": " + e.getMessage());
+                                System.err.println("Error fetching commit " + sha + ": " + e.getMessage());
                             }
                         }));
                     }
@@ -102,6 +104,7 @@ public class GitLabService {
 
             } catch (Exception e) {
                 statusCallback.accept("Ошибка проекта " + projectId + ": " + e.getMessage());
+                System.err.println("Project " + projectId + " error: " + e.getMessage());
                 return Collections.emptyList();
             }
         });
