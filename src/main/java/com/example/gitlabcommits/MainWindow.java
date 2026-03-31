@@ -3,63 +3,74 @@ package com.example.gitlabcommits;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
-import java.awt.datatransfer.*;
+import java.awt.datatransfer.StringSelection;
+import java.awt.event.ItemEvent;
+import java.util.*;
 import java.util.List;
+import java.util.stream.Collectors;
 
 public class MainWindow extends JFrame {
 
     private final AppConfig config;
 
-    private final JTextField hostField;
-    private final JPasswordField tokenField;
-    private final JTextField projectIdField;
-    private final JTextField projectNameField;
-    private final JTextField segmentField;
-    private final JTextField sinceField;
-    private final JTextField untilField;
+    private final HistoryComboBox hostCombo;
+    private final HistoryComboBox tokenCombo;
+    private final HistoryComboBox segmentCombo;
+    private final HistoryComboBox projectIdsCombo;
+    private final HistoryComboBox sinceCombo;
+    private final HistoryComboBox untilCombo;
 
     private final JTextArea outputArea;
     private final JButton runButton;
+    private final JButton copyButton;
     private final JLabel statusLabel;
+    private final JProgressBar progressBar;
 
     public MainWindow(AppConfig config) {
         super("GitLab Get Commits");
         this.config = config;
 
         setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setMinimumSize(new Dimension(750, 600));
+        setMinimumSize(new Dimension(800, 650));
 
+        List<String> hosts = config.getHosts();
+        String firstHost = hosts.isEmpty() ? "http://10.1.5.6" : hosts.get(0);
+
+        hostCombo       = new HistoryComboBox(hosts, firstHost);
+        tokenCombo      = new HistoryComboBox(config.getList(firstHost, "token"),      "");
+        segmentCombo    = new HistoryComboBox(config.getList(firstHost, "segment"),    "Полигон");
+        projectIdsCombo = new HistoryComboBox(config.getList(firstHost, "projectIds"), "153");
+        sinceCombo      = new HistoryComboBox(config.getList(firstHost, "since"),      "2025-10-01T00:00:01Z");
+        untilCombo      = new HistoryComboBox(config.getList(firstHost, "until"),      "2025-11-01T00:00:01Z");
+
+        // When host is selected from dropdown, reload all other combos
+        hostCombo.addItemListener(e -> {
+            if (e.getStateChange() == ItemEvent.SELECTED) {
+                reloadCombos(hostCombo.getCurrentValue());
+            }
+        });
+
+        // Form
         JPanel form = new JPanel(new GridBagLayout());
         form.setBorder(new EmptyBorder(12, 12, 8, 12));
-        GridBagConstraints lc = labelConstraints();
-        GridBagConstraints fc = fieldConstraints();
-
-        hostField        = new JTextField(config.get("host",        "http://10.1.5.6"), 30);
-        tokenField       = new JPasswordField(config.get("token",   ""), 30);
-        projectIdField   = new JTextField(config.get("projectId",   "153"), 10);
-        projectNameField = new JTextField(config.get("projectName", "asdko-core"), 20);
-        segmentField     = new JTextField(config.get("segment",     "\u041f\u043e\u043b\u0438\u0433\u043e\u043d"), 20);
-        sinceField       = new JTextField(config.get("since",       "2025-10-01T00:00:01Z"), 22);
-        untilField       = new JTextField(config.get("until",       "2025-11-01T00:00:01Z"), 22);
-
         int row = 0;
-        addRow(form, lc, fc, row++, "GitLab Host:",  hostField);
-        addRow(form, lc, fc, row++, "Token:",        tokenField);
-        addRow(form, lc, fc, row++, "Project ID:",   projectIdField);
-        addRow(form, lc, fc, row++, "Project Name:", projectNameField);
-        addRow(form, lc, fc, row++, "Segment:",      segmentField);
-        addRow(form, lc, fc, row++, "Since (ISO):",  sinceField);
-        addRow(form, lc, fc, row++, "Until (ISO):",  untilField);
+        addRow(form, row++, "GitLab Host:",                hostCombo);
+        addRow(form, row++, "Token:",                      tokenCombo);
+        addRow(form, row++, "Segment:",                    segmentCombo);
+        addRow(form, row++, "Project IDs (через запятую):", projectIdsCombo);
+        addRow(form, row++, "Since (ISO 8601):",            sinceCombo);
+        addRow(form, row++, "Until (ISO 8601):",            untilCombo);
 
-        runButton   = new JButton("\u041f\u043e\u043b\u0443\u0447\u0438\u0442\u044c \u043a\u043e\u043c\u043c\u0438\u0442\u044b");
-        JButton copyButton  = new JButton("\u0421\u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u0442\u044c");
-        JButton clearButton = new JButton("\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c");
+        // Buttons
+        runButton  = new JButton("Получить коммиты");
+        copyButton = new JButton("Скопировать");
+        JButton clearButton = new JButton("Очистить");
         statusLabel = new JLabel(" ");
-        statusLabel.setForeground(new Color(60, 130, 60));
+        statusLabel.setForeground(new Color(50, 120, 50));
 
-        runButton.addActionListener(e -> runFetch());
+        runButton.addActionListener(e  -> runFetch());
         copyButton.addActionListener(e -> copyToClipboard());
-        clearButton.addActionListener(e -> outputArea.setText(""));
+        clearButton.addActionListener(e -> { outputArea.setText(""); statusLabel.setText(" "); });
 
         JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         btnPanel.add(runButton);
@@ -67,83 +78,130 @@ public class MainWindow extends JFrame {
         btnPanel.add(clearButton);
         btnPanel.add(statusLabel);
 
+        // Progress bar
+        progressBar = new JProgressBar();
+        progressBar.setIndeterminate(false);
+        progressBar.setStringPainted(true);
+        progressBar.setString("");
+        progressBar.setVisible(false);
+        progressBar.setPreferredSize(new Dimension(0, 20));
+
+        // Output area
         outputArea = new JTextArea();
         outputArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         outputArea.setLineWrap(false);
         JScrollPane scroll = new JScrollPane(outputArea);
-        scroll.setBorder(BorderFactory.createTitledBorder("\u0420\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442 (CSV)"));
+        scroll.setBorder(BorderFactory.createTitledBorder("Результат (CSV)"));
 
-        JPanel top = new JPanel(new BorderLayout());
-        top.add(form, BorderLayout.CENTER);
-        top.add(btnPanel, BorderLayout.SOUTH);
+        JPanel top = new JPanel(new BorderLayout(0, 2));
+        top.add(progressBar, BorderLayout.NORTH);
+        top.add(form,        BorderLayout.CENTER);
+        top.add(btnPanel,    BorderLayout.SOUTH);
 
         setLayout(new BorderLayout(0, 4));
-        add(top, BorderLayout.NORTH);
+        add(top,    BorderLayout.NORTH);
         add(scroll, BorderLayout.CENTER);
 
         pack();
         setLocationRelativeTo(null);
     }
 
+    private void reloadCombos(String host) {
+        reloadCombo(tokenCombo,      config.getList(host, "token"),      "");
+        reloadCombo(segmentCombo,    config.getList(host, "segment"),     "Полигон");
+        reloadCombo(projectIdsCombo, config.getList(host, "projectIds"),  "153");
+        reloadCombo(sinceCombo,      config.getList(host, "since"),       "2025-10-01T00:00:01Z");
+        reloadCombo(untilCombo,      config.getList(host, "until"),       "2025-11-01T00:00:01Z");
+    }
+
+    private void reloadCombo(HistoryComboBox combo, List<String> items, String def) {
+        combo.removeAllItems();
+        for (String item : items) combo.addItem(item);
+        if (items.isEmpty() && !def.isEmpty()) combo.addItem(def);
+        if (combo.getItemCount() > 0) combo.setSelectedIndex(0);
+    }
+
     private void runFetch() {
-        String host         = hostField.getText().trim();
-        String token        = new String(tokenField.getPassword()).trim();
-        String projectIdStr = projectIdField.getText().trim();
-        String projectName  = projectNameField.getText().trim();
-        String segment      = segmentField.getText().trim();
-        String since        = sinceField.getText().trim();
-        String until        = untilField.getText().trim();
+        String host       = hostCombo.getCurrentValue();
+        String token      = tokenCombo.getCurrentValue();
+        String segment    = segmentCombo.getCurrentValue();
+        String projectStr = projectIdsCombo.getCurrentValue();
+        String since      = sinceCombo.getCurrentValue();
+        String until      = untilCombo.getCurrentValue();
 
-        if (host.isEmpty() || token.isEmpty() || projectIdStr.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "\u0417\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 Host, Token \u0438 Project ID", "\u041e\u0448\u0438\u0431\u043a\u0430", JOptionPane.ERROR_MESSAGE);
+        if (host.isEmpty() || token.isEmpty() || projectStr.isEmpty()) {
+            JOptionPane.showMessageDialog(this,
+                    "Заполните Host, Token и Project IDs", "Ошибка", JOptionPane.ERROR_MESSAGE);
             return;
         }
 
-        int projectId;
+        List<Integer> projectIds;
         try {
-            projectId = Integer.parseInt(projectIdStr);
-        } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(this, "Project ID \u0434\u043e\u043b\u0436\u0435\u043d \u0431\u044b\u0442\u044c \u0447\u0438\u0441\u043b\u043e\u043c", "\u041e\u0448\u0438\u0431\u043a\u0430", JOptionPane.ERROR_MESSAGE);
+            projectIds = Arrays.stream(projectStr.split("[,;\\s]+"))
+                    .map(String::trim).filter(s -> !s.isEmpty())
+                    .map(Integer::parseInt)
+                    .collect(Collectors.toList());
+        } catch (NumberFormatException ex) {
+            JOptionPane.showMessageDialog(this,
+                    "Project IDs должны быть числами, разделёнными запятыми",
+                    "Ошибка", JOptionPane.ERROR_MESSAGE);
             return;
         }
 
-        config.set("host",        host);
-        config.set("token",       token);
-        config.set("projectId",   projectIdStr);
-        config.set("projectName", projectName);
-        config.set("segment",     segment);
-        config.set("since",       since);
-        config.set("until",       until);
+        // Persist
+        config.addHost(host);
+        hostCombo.pushValue(host);
+        saveCombo(host, "token",      tokenCombo,      token);
+        saveCombo(host, "segment",    segmentCombo,    segment);
+        saveCombo(host, "projectIds", projectIdsCombo, projectStr);
+        saveCombo(host, "since",      sinceCombo,      since);
+        saveCombo(host, "until",      untilCombo,      until);
         config.save();
 
+        // UI
         runButton.setEnabled(false);
-        statusLabel.setText("\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430...");
+        copyButton.setEnabled(false);
         outputArea.setText("");
+        progressBar.setVisible(true);
+        progressBar.setIndeterminate(true);
+        progressBar.setString("Инициализация...");
+        statusLabel.setText(" ");
 
-        GitLabClient client = new GitLabClient(host, token, projectId, since, until, segment, projectName);
+        GitLabService service = new GitLabService(host, token, segment, since, until,
+                msg -> SwingUtilities.invokeLater(() -> progressBar.setString(msg)));
 
-        client.fetchAllCommits()
+        service.fetchProjects(projectIds)
                 .thenAccept(commits -> SwingUtilities.invokeLater(() -> {
+                    progressBar.setIndeterminate(false);
+                    progressBar.setValue(100);
                     if (commits.isEmpty()) {
-                        statusLabel.setText("\u041a\u043e\u043c\u043c\u0438\u0442\u043e\u0432 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e");
+                        progressBar.setString("Готово — 0 коммитов");
+                        statusLabel.setText("Коммитов не найдено");
                     } else {
                         String csv = commits.stream()
-                                .sorted((a, b) -> a.committedDate().compareTo(b.committedDate()))
                                 .map(CommitDetail::toCsvRow)
-                                .distinct()
-                                .reduce("", (a, b) -> a.isEmpty() ? b : a + "\n" + b);
+                                .collect(Collectors.joining("\n"));
                         outputArea.setText(csv);
-                        statusLabel.setText("\u0413\u043e\u0442\u043e\u0432\u043e: " + commits.size() + " \u043a\u043e\u043c\u043c\u0438\u0442\u043e\u0432");
+                        progressBar.setString("Готово — " + commits.size() + " коммитов");
+                        statusLabel.setText("Найдено: " + commits.size());
                     }
                     runButton.setEnabled(true);
+                    copyButton.setEnabled(true);
                 }))
                 .exceptionally(ex -> {
                     SwingUtilities.invokeLater(() -> {
-                        statusLabel.setText("\u041e\u0448\u0438\u0431\u043a\u0430: " + ex.getMessage());
+                        progressBar.setIndeterminate(false);
+                        progressBar.setString("Ошибка");
+                        statusLabel.setText("Ошибка: " + (ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage()));
                         runButton.setEnabled(true);
                     });
                     return null;
                 });
+    }
+
+    private void saveCombo(String host, String key, HistoryComboBox combo, String currentValue) {
+        combo.pushValue(currentValue);
+        config.setList(host, key, currentValue, combo.getAllItems());
     }
 
     private void copyToClipboard() {
@@ -151,31 +209,22 @@ public class MainWindow extends JFrame {
         if (text.isEmpty()) return;
         Toolkit.getDefaultToolkit().getSystemClipboard()
                 .setContents(new StringSelection(text), null);
-        statusLabel.setText("\u0421\u043a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u043d\u043e \u0432 \u0431\u0443\u0444\u0435\u0440 \u043e\u0431\u043c\u0435\u043d\u0430");
+        statusLabel.setText("Скопировано в буфер обмена");
     }
 
-    private void addRow(JPanel panel, GridBagConstraints lc, GridBagConstraints fc,
-                        int row, String label, JComponent field) {
-        lc.gridy = row;
-        fc.gridy = row;
-        panel.add(new JLabel(label), lc);
+    private void addRow(JPanel panel, int row, String labelText, JComponent field) {
+        GridBagConstraints lc = new GridBagConstraints();
+        lc.gridx = 0; lc.gridy = row;
+        lc.anchor = GridBagConstraints.EAST;
+        lc.insets = new Insets(4, 4, 4, 8);
+
+        GridBagConstraints fc = new GridBagConstraints();
+        fc.gridx = 1; fc.gridy = row;
+        fc.fill = GridBagConstraints.HORIZONTAL;
+        fc.weightx = 1.0;
+        fc.insets = new Insets(4, 0, 4, 4);
+
+        panel.add(new JLabel(labelText), lc);
         panel.add(field, fc);
-    }
-
-    private GridBagConstraints labelConstraints() {
-        GridBagConstraints c = new GridBagConstraints();
-        c.gridx = 0;
-        c.anchor = GridBagConstraints.EAST;
-        c.insets = new Insets(4, 4, 4, 8);
-        return c;
-    }
-
-    private GridBagConstraints fieldConstraints() {
-        GridBagConstraints c = new GridBagConstraints();
-        c.gridx = 1;
-        c.fill = GridBagConstraints.HORIZONTAL;
-        c.weightx = 1.0;
-        c.insets = new Insets(4, 0, 4, 4);
-        return c;
     }
 }

@@ -9,9 +9,6 @@ public class Main {
         } catch (Exception ignored) {}
 
         AppConfig config = new AppConfig();
-        SwingUtilities.invokeLater(() -> {
-            MainWindow window = new MainWindow(config);
-            window.setVisible(true);
-        });
+        SwingUtilities.invokeLater(() -> new MainWindow(config).setVisible(true));
     }
 }

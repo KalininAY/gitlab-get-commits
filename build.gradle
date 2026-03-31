@@ -12,6 +12,7 @@ repositories {
 }
 
 dependencies {
+    implementation 'org.gitlab4j:gitlab4j-api:6.0.0-rc.5'
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.0'
 }
 

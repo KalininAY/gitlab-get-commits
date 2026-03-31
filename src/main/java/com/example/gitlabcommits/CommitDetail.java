@@ -19,14 +19,13 @@ public record CommitDetail(
     public String toCsvRow() {
         String formattedDate;
         try {
-            Instant instant = Instant.parse(committedDate);
-            formattedDate = FORMATTER.format(instant);
+            formattedDate = FORMATTER.format(Instant.parse(committedDate));
         } catch (Exception ignored) {
             formattedDate = committedDate;
         }
-        String safeMessage = message.replace(";", ",").replace("\n", " ");
+        String safeMsg = message.replace(";", ",").replace("\n", " ").trim();
         return String.join(";",
-                id, segment, projectName, formattedDate, safeMessage, committerName,
+                id, segment, projectName, formattedDate, safeMsg, committerName,
                 String.valueOf(additions), String.valueOf(deletions));
     }
 }
