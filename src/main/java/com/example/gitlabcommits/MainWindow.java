@@ -56,7 +56,7 @@ public class MainWindow extends JFrame {
         projectNamesField = new JTextField("");
         projectNamesField.setEditable(false);
         projectNamesField.setForeground(new Color(80, 80, 80));
-        projectNamesField.setFont(projectNamesField.getFont().deriveFont(Font.ITALIC));
+        projectNamesField.setFont(projectNamesField.getFont().deriveFont(Font.BOLD));
         projectNamesField.setToolTipText("Имена проектов разрешаются автоматически");
 
         hostCombo.addItemListener(e -> {
@@ -94,10 +94,6 @@ public class MainWindow extends JFrame {
         statusLabel = new JLabel(" ");
         statusLabel.setForeground(new Color(50, 120, 50));
 
-        runButton.addActionListener(e  -> runFetch());
-        copyButton.addActionListener(e -> copyToClipboard());
-        clearButton.addActionListener(e -> { outputArea.setText(""); statusLabel.setText(" "); });
-
         JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         btnPanel.add(runButton);
         btnPanel.add(copyButton);
@@ -125,6 +121,10 @@ public class MainWindow extends JFrame {
         outputArea.setLineWrap(false);
         JScrollPane scroll = new JScrollPane(outputArea);
         scroll.setBorder(BorderFactory.createTitledBorder("Результат (CSV)"));
+
+        runButton.addActionListener(e  -> runFetch());
+        copyButton.addActionListener(e -> copyToClipboard());
+        clearButton.addActionListener(e -> { outputArea.setText(""); statusLabel.setText(" "); });
 
         JPanel top = new JPanel(new BorderLayout(0, 2));
         top.add(progressPanel, BorderLayout.NORTH);
@@ -305,6 +305,8 @@ public class MainWindow extends JFrame {
                         statusLabel.setText("Коммитов не найдено");
                     } else {
                         String csv = commits.stream()
+                                .sorted(Comparator.comparing(CommitDetail::projectName))
+                                .sorted(Comparator.comparing(CommitDetail::projectName))
                                 .map(CommitDetail::toCsvRow)
                                 .collect(Collectors.joining("\n"));
                         outputArea.setText(csv);

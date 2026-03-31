@@ -17,7 +17,10 @@ public class GitLabService {
     private final String segment;
     private final String since;
     private final String until;
+
+    /** (done, total) — both numbers grow over time */
     private final BiConsumer<Integer, Integer> progressCallback;
+    /** Text phase label shown next to the numbers */
     private final Consumer<String> phaseCallback;
     private final UserResolver userResolver = new UserResolver();
 
@@ -65,7 +68,7 @@ public class GitLabService {
                 // ── Phase 1: direct commits ──────────────────────────────────────
                 phaseCallback.accept("[" + projectName + "] прямые коммиты...");
                 List<Commit> directCommits = commitsApi.getCommits(
-                        (Object) projectId, null, sinceDate, untilDate, null,
+                        projectId, null, sinceDate, untilDate, null,
                         Boolean.TRUE, Boolean.TRUE, Boolean.FALSE
                 );
                 total.addAndGet(directCommits.size());
@@ -82,20 +85,26 @@ public class GitLabService {
                 List<MergeRequest> mrs = api.getMergeRequestApi()
                         .getMergeRequests(projectId, Constants.MergeRequestState.ALL, 1, 100);
 
+                // Each MR's commits are fetched in parallel; as soon as we know
+                // the SHAs from one MR we add them to total and launch detail requests.
                 List<CompletableFuture<Void>> allMrFutures = new ArrayList<>();
+
                 for (MergeRequest mr : mrs) {
                     allMrFutures.add(CompletableFuture.runAsync(() -> {
                         try {
                             List<Commit> mrCommits = api.getMergeRequestApi()
                                     .getCommits(projectId, mr.getIid(), 1, 100);
+
+                            // Add this MR's commits to total immediately
                             total.addAndGet(mrCommits.size());
                             fireProgress();
 
+                            // Launch parallel detail requests for each SHA
                             List<CompletableFuture<Void>> detailFutures = mrCommits.stream()
-                                    .map(c -> c.getId())
+                                    .map(Commit::getId)
                                     .map(sha -> CompletableFuture.runAsync(() -> {
                                         try {
-                                            Commit detail = commitsApi.getCommit((Object) projectId, sha);
+                                            Commit detail = commitsApi.getCommit(projectId, sha);
                                             CommitDetail cd = toDetail(detail, segment, projectName);
                                             if (cd != null) unique.put(cd.id(), cd);
                                         } catch (Exception e) {
@@ -106,6 +115,7 @@ public class GitLabService {
                                         }
                                     }))
                                     .toList();
+
                             CompletableFuture.allOf(detailFutures.toArray(new CompletableFuture[0])).join();
                         } catch (Exception e) {
                             System.err.println("Error fetching MR " + mr.getIid() + ": " + e.getMessage());
@@ -147,12 +157,21 @@ public class GitLabService {
         }
 
         // Resolve email -> GitLab username (cached)
-        String username = userResolver.resolve(api, cacheKey, c.getAuthorEmail());
+        String username = userResolver.resolve(api, cacheKey, c.getAuthorName());
 
         return new CommitDetail(
                 c.getId(), dateStr, msg,
-                username,
+                author(username),
                 additions, deletions, segment, projectName);
+    }
+
+    private String author(String email) {
+        if (email.isBlank())
+            return email;
+        int pos = email.indexOf('@');
+        if (pos > -1)
+            email = email.substring(0, pos);
+        return email;
     }
 
     private boolean isTimeBound(String dateStr) {

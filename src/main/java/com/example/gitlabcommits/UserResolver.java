@@ -19,28 +19,30 @@ public class UserResolver {
 
     /**
      * Synchronous lookup — call from a background thread only.
-     * Returns GitLab username (e.g. "65karpovrv") or the original email as fallback.
+     * Returns GitLab username (e.g. "65karpovrv") or author's name as fallback.
      */
-    public String resolve(GitLabApi api, String cacheKey, String email) {
-        if (email == null || email.isBlank()) return "";
+    public String resolve(GitLabApi api, String cacheKey, String author) {
+        if (author == null || author.isBlank()) return "";
 
         Map<String, String> hostCache = cache.computeIfAbsent(cacheKey, k -> new ConcurrentHashMap<>());
 
-        return hostCache.computeIfAbsent(email, e -> {
+        return hostCache.computeIfAbsent(author, a -> {
             try {
-                List<User> users = api.getUserApi().findUsers(e);
+                List<User> users = api.getUserApi().findUsers(a);
                 // findUsers searches by username AND email; prefer exact email match
                 for (User u : users) {
-                    if (e.equalsIgnoreCase(u.getEmail())) return u.getUsername();
+                    if (a.equalsIgnoreCase(u.getName())) {
+                        return u.getUsername();
+                    }
                 }
                 // No exact match — return first result's username if any
-                if (!users.isEmpty()) return users.get(0).getUsername();
+                if (!users.isEmpty())
+                    return users.get(0).getUsername();
             } catch (Exception ex) {
-                System.err.println("UserResolver: failed to resolve '" + e + "': " + ex.getMessage());
+                System.err.println("UserResolver: failed to resolve '" + a + "': " + ex.getMessage());
             }
-            // Fallback: strip domain from email to get something readable (e.g. "jsmith")
-            int at = e.indexOf('@');
-            return at > 0 ? e.substring(0, at) : e;
+            // Fallback
+            return author;
         });
     }
 
