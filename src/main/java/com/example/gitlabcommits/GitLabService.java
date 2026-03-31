@@ -32,7 +32,16 @@ public class GitLabService {
                          String since, String until,
                          BiConsumer<Integer, Integer> progressCallback,
                          Consumer<String> phaseCallback) {
-        this.api = new GitLabApi(host, token);
+        GitLabApi gitLabApi;
+        try {
+            // Disable SSL verification for self-signed / corporate CA certificates
+            gitLabApi = new GitLabApi(host, token);
+            gitLabApi.setIgnoreCertificateErrors(true);
+        } catch (Exception e) {
+            // fallback — should not happen
+            gitLabApi = new GitLabApi(host, token);
+        }
+        this.api = gitLabApi;
         this.cacheKey = host + "|" + token;
         this.segment = segment;
         this.since = since;
@@ -86,8 +95,6 @@ public class GitLabService {
                 List<MergeRequest> mrs = api.getMergeRequestApi()
                         .getMergeRequests(projectId, Constants.MergeRequestState.ALL, 1, 100);
 
-                // Each MR's commits are fetched in parallel; as soon as we know
-                // the SHAs from one MR we add them to total and launch detail requests.
                 List<CompletableFuture<Void>> allMrFutures = new ArrayList<>();
 
                 for (MergeRequest mr : mrs) {
@@ -96,11 +103,8 @@ public class GitLabService {
                             List<Commit> mrCommits = api.getMergeRequestApi()
                                     .getCommits(projectId, mr.getIid(), 1, 100);
 
-                            // Add this MR's commits to total immediately
                             total.addAndGet(mrCommits.size());
                             fireProgress();
-
-                            // Launch parallel detail requests for each SHA
 
                             CompletableFuture.allOf(mrCommits.stream()
                                     .map(Commit::getId)
@@ -155,7 +159,6 @@ public class GitLabService {
             deletions = c.getStats().getDeletions() != null ? c.getStats().getDeletions() : 0;
         }
 
-        // Resolve email -> GitLab username (cached)
         String username = userResolver.resolve(api, cacheKey, c.getAuthorName());
 
         return new CommitDetail(
@@ -165,11 +168,9 @@ public class GitLabService {
     }
 
     private String author(String email) {
-        if (email.isBlank())
-            return email;
+        if (email == null || email.isBlank()) return "";
         int pos = email.indexOf('@');
-        if (pos > -1)
-            email = email.substring(0, pos);
+        if (pos > -1) email = email.substring(0, pos);
         return email;
     }
 
