@@ -13,6 +13,9 @@ import java.util.stream.Collectors;
 
 public class GitLabService {
 
+    /** Items per page for all Pager calls. GitLab max is 100. */
+    private static final int PAGE_SIZE = 100;
+
     private final GitLabApi api;
     private final String cacheKey;
     private final String segment;
@@ -38,6 +41,10 @@ public class GitLabService {
         this.phaseCallback = phaseCallback;
     }
 
+    // ------------------------------------------------------------------ //
+    //  Public entry point
+    // ------------------------------------------------------------------ //
+
     public CompletableFuture<List<CommitDetail>> fetchProjects(List<Integer> projectIds) {
         List<CompletableFuture<List<CommitDetail>>> futures = projectIds.stream()
                 .map(this::fetchProject)
@@ -57,6 +64,10 @@ public class GitLabService {
                 });
     }
 
+    // ------------------------------------------------------------------ //
+    //  Per-project fetch
+    // ------------------------------------------------------------------ //
+
     private CompletableFuture<List<CommitDetail>> fetchProject(final int projectId) {
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -67,21 +78,30 @@ public class GitLabService {
                 Date sinceDate = Date.from(Instant.parse(since));
                 Date untilDate = Date.from(Instant.parse(until));
 
-                // ---- Phase 1: direct commits in date range ----
-                // 5.x API: getCommits(Object, String refName, Date since, Date until, int page, int perPage)
-                // Returns stats as part of each Commit when fetched individually;
-                // list endpoint does NOT include stats, so we need a detail call per commit.
+                // ---- Phase 1: direct commits (ALL pages) ----
+                // Signature: getCommits(Object, refName, since, until, path, withStats, withTrailers, firstParent, pageSize) -> Pager
+                // refName=null means all branches (equivalent to ?all=true in the JS version)
                 phaseCallback.accept("[" + projectName + "] прямые коммиты...");
-                List<Commit> directCommits = commitsApi.getCommits(
-                        (Object) projectId, null, sinceDate, untilDate, 1, 1000
+                List<Commit> directCommits = allPages(
+                        commitsApi.getCommits(
+                                (Object) projectId,
+                                null,          // refName – all branches
+                                sinceDate,
+                                untilDate,
+                                null,          // path filter
+                                Boolean.FALSE, // withStats – list doesn't include stats anyway; fetched per-commit below
+                                Boolean.FALSE, // withTrailers
+                                Boolean.FALSE, // firstParent
+                                PAGE_SIZE
+                        )
                 );
                 total.addAndGet(directCommits.size());
                 fireProgress();
 
+                // Fetch details (with stats) in parallel
                 List<CompletableFuture<Void>> directDetailFutures = directCommits.stream()
                         .map(c -> CompletableFuture.runAsync(() -> {
                             try {
-                                // getCommit(Object, String) — includes stats
                                 Commit detail = commitsApi.getCommit((Object) projectId, c.getId());
                                 CommitDetail cd = toDetail(detail, segment, projectName);
                                 if (cd != null) unique.put(cd.id(), cd);
@@ -95,21 +115,28 @@ public class GitLabService {
                         .collect(Collectors.toList());
                 CompletableFuture.allOf(directDetailFutures.toArray(new CompletableFuture[0])).join();
 
-                // ---- Phase 2: MR commits ----
+                // ---- Phase 2: MR commits (ALL pages for both MRs and MR commits) ----
                 phaseCallback.accept("[" + projectName + "] MR-списки...");
-                // getMergeRequests(Object, MergeRequestState, int page, int perPage)
-                List<MergeRequest> mrs = api.getMergeRequestApi()
-                        .getMergeRequests((Object) projectId,
-                                Constants.MergeRequestState.ALL, 1, 100);
+                // getMergeRequests(Object, MergeRequestState, pageSize) -> Pager
+                List<MergeRequest> mrs = allPages(
+                        api.getMergeRequestApi().getMergeRequests(
+                                (Object) projectId,
+                                Constants.MergeRequestState.ALL,
+                                PAGE_SIZE
+                        )
+                );
 
                 List<CompletableFuture<Void>> allMrFutures = new ArrayList<>();
                 for (MergeRequest mr : mrs) {
                     final long mrIid = mr.getIid();
                     allMrFutures.add(CompletableFuture.runAsync(() -> {
                         try {
-                            // getCommits(Object, Long, int page, int perPage)
-                            List<Commit> mrCommits = api.getMergeRequestApi()
-                                    .getCommits((Object) projectId, mrIid, 1, 100);
+                            // getCommits(Object, Long, pageSize) -> Pager
+                            List<Commit> mrCommits = allPages(
+                                    api.getMergeRequestApi().getCommits(
+                                            (Object) projectId, mrIid, PAGE_SIZE
+                                    )
+                            );
                             total.addAndGet(mrCommits.size());
                             fireProgress();
 
@@ -146,6 +173,22 @@ public class GitLabService {
             }
         });
     }
+
+    // ------------------------------------------------------------------ //
+    //  Pager helper: collect all pages into a flat list (synchronous)
+    // ------------------------------------------------------------------ //
+
+    private static <T> List<T> allPages(Pager<T> pager) throws GitLabApiException {
+        List<T> result = new ArrayList<>();
+        while (pager.hasNext()) {
+            result.addAll(pager.next());
+        }
+        return result;
+    }
+
+    // ------------------------------------------------------------------ //
+    //  Helpers
+    // ------------------------------------------------------------------ //
 
     private void fireProgress() {
         progressCallback.accept(done.get(), total.get());
