@@ -30,6 +30,7 @@ public class MainWindow extends JFrame {
     private final JButton      copyButton;
     private final JLabel       statusLabel;
     private final JProgressBar progressBar;
+    private final JLabel       phaseLabel;   // текстовая фаза рядом с шкалой
 
     private ScheduledFuture<?> pendingLookup;
     private final ScheduledExecutorService scheduler =
@@ -40,7 +41,7 @@ public class MainWindow extends JFrame {
         this.config = config;
 
         setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setMinimumSize(new Dimension(800, 680));
+        setMinimumSize(new Dimension(860, 700));
 
         List<String> hosts = config.getHosts();
         String firstHost = hosts.isEmpty() ? "http://10.1.5.6" : hosts.get(0);
@@ -103,13 +104,20 @@ public class MainWindow extends JFrame {
         btnPanel.add(clearButton);
         btnPanel.add(statusLabel);
 
-        // Progress bar — determinate, max is updated dynamically
+        // Progress panel: [bar] [phase label]
         progressBar = new JProgressBar(0, 1);
-        progressBar.setIndeterminate(false);
         progressBar.setStringPainted(true);
         progressBar.setString("");
-        progressBar.setVisible(false);
         progressBar.setPreferredSize(new Dimension(0, 22));
+
+        phaseLabel = new JLabel("");
+        phaseLabel.setFont(phaseLabel.getFont().deriveFont(Font.PLAIN, 11f));
+        phaseLabel.setForeground(new Color(100, 100, 100));
+
+        JPanel progressPanel = new JPanel(new BorderLayout(6, 0));
+        progressPanel.add(progressBar, BorderLayout.CENTER);
+        progressPanel.add(phaseLabel,  BorderLayout.EAST);
+        progressPanel.setVisible(false);
 
         // Output area
         outputArea = new JTextArea();
@@ -119,9 +127,9 @@ public class MainWindow extends JFrame {
         scroll.setBorder(BorderFactory.createTitledBorder("Результат (CSV)"));
 
         JPanel top = new JPanel(new BorderLayout(0, 2));
-        top.add(progressBar, BorderLayout.NORTH);
-        top.add(form,        BorderLayout.CENTER);
-        top.add(btnPanel,    BorderLayout.SOUTH);
+        top.add(progressPanel, BorderLayout.NORTH);
+        top.add(form,          BorderLayout.CENTER);
+        top.add(btnPanel,      BorderLayout.SOUTH);
 
         setLayout(new BorderLayout(0, 4));
         add(top,    BorderLayout.NORTH);
@@ -132,26 +140,29 @@ public class MainWindow extends JFrame {
     }
 
     // -----------------------------------------------------------------------
-    // Progress bar update — called from any thread
+    // Progress
     // -----------------------------------------------------------------------
 
-    /**
-     * Update progress bar with current counters.
-     * Both done and total may increase over time as new work is discovered.
-     * Fill = done/total (if total>0), else indeterminate pulse.
-     */
-    private void updateProgress(int done, int total) {
+    private JPanel getProgressPanel() {
+        return (JPanel) progressBar.getParent();
+    }
+
+    private void updateProgress(int d, int t) {
         SwingUtilities.invokeLater(() -> {
-            if (total == 0) {
+            if (t == 0) {
                 progressBar.setIndeterminate(true);
                 progressBar.setString("считаю...");
             } else {
                 progressBar.setIndeterminate(false);
-                progressBar.setMaximum(total);
-                progressBar.setValue(done);
-                progressBar.setString(done + " / " + total);
+                progressBar.setMaximum(t);
+                progressBar.setValue(d);
+                progressBar.setString(d + " / " + t);
             }
         });
+    }
+
+    private void updatePhase(String phase) {
+        SwingUtilities.invokeLater(() -> phaseLabel.setText(phase));
     }
 
     // -----------------------------------------------------------------------
@@ -274,10 +285,13 @@ public class MainWindow extends JFrame {
         progressBar.setValue(0);
         progressBar.setIndeterminate(true);
         progressBar.setString("считаю...");
-        progressBar.setVisible(true);
+        phaseLabel.setText("");
+        getProgressPanel().setVisible(true);
 
-        GitLabService service = new GitLabService(host, token, segment, since, until,
-                (done, total) -> updateProgress(done, total));
+        GitLabService service = new GitLabService(
+                host, token, segment, since, until,
+                this::updateProgress,
+                this::updatePhase);
 
         service.fetchProjects(projectIds)
                 .thenAccept(commits -> SwingUtilities.invokeLater(() -> {
@@ -285,7 +299,8 @@ public class MainWindow extends JFrame {
                     progressBar.setIndeterminate(false);
                     progressBar.setMaximum(Math.max(1, progressBar.getMaximum()));
                     progressBar.setValue(progressBar.getMaximum());
-                    progressBar.setString("Готово — найдено " + n + " коммитов");
+                    progressBar.setString("Готово — " + n + " коммитов");
+                    phaseLabel.setText("");
                     if (n == 0) {
                         statusLabel.setText("Коммитов не найдено");
                     } else {
@@ -302,6 +317,7 @@ public class MainWindow extends JFrame {
                     SwingUtilities.invokeLater(() -> {
                         progressBar.setIndeterminate(false);
                         progressBar.setString("Ошибка");
+                        phaseLabel.setText("");
                         statusLabel.setText("Ошибка: " +
                                 (ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage()));
                         runButton.setEnabled(true);
