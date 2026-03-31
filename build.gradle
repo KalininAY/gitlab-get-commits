@@ -21,12 +21,38 @@ application {
     mainClass = 'com.example.gitlabcommits.Main'
 }
 
+// Standard jar — classes only, no dependencies
 jar {
     manifest {
         attributes 'Main-Class': 'com.example.gitlabcommits.Main'
     }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+// Fat jar — everything bundled, runnable with: java -jar build/libs/gitlab-get-commits-all.jar
+tasks.register('fatJar', Jar) {
+    group       = 'build'
+    description = 'Assembles a runnable jar with all runtime dependencies included'
+
+    archiveClassifier = 'all'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    manifest {
+        attributes 'Main-Class': 'com.example.gitlabcommits.Main'
+    }
+
+    from sourceSets.main.output
     from {
         configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
     }
-    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    // Exclude module-info and signature files that can cause issues
+    exclude 'META-INF/*.SF'
+    exclude 'META-INF/*.DSA'
+    exclude 'META-INF/*.RSA'
+    exclude 'META-INF/versions/**'
+    exclude 'module-info.class'
 }
+
+// Make 'assemble' also build the fat jar
+assemble.dependsOn fatJar
