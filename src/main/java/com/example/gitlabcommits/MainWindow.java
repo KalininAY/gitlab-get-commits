@@ -175,9 +175,25 @@ public class MainWindow extends JFrame {
 
     private void appendLog(String line) {
         SwingUtilities.invokeLater(() -> {
-            if (csvResult != null) return; // already finished, don't overwrite
+            if (csvResult != null) return;
             outputArea.append(line + "\n");
             outputArea.setCaretPosition(outputArea.getDocument().getLength());
+        });
+    }
+
+    private void appendError(String line) {
+        SwingUtilities.invokeLater(() -> {
+            if (csvResult != null) return;
+            int pos = outputArea.getDocument().getLength();
+            outputArea.append(line + "\n");
+            // Colour the error line red
+            outputArea.setCaretPosition(outputArea.getDocument().getLength());
+            javax.swing.text.Highlighter h = outputArea.getHighlighter();
+            try {
+                h.addHighlight(pos, pos + line.length(),
+                        new javax.swing.text.DefaultHighlighter.DefaultHighlightPainter(
+                                new Color(255, 220, 220)));
+            } catch (javax.swing.text.BadLocationException ignored) {}
         });
     }
 
@@ -324,6 +340,7 @@ public class MainWindow extends JFrame {
         runButton.setEnabled(false);
         copyButton.setEnabled(false);
         outputArea.setText("");
+        outputArea.getHighlighter().removeAllHighlights();
         statusLabel.setText(" ");
         progressBar.setMaximum(1);
         progressBar.setValue(0);
@@ -336,7 +353,8 @@ public class MainWindow extends JFrame {
         GitLabService service = new GitLabService(
                 host, token, segment, since, until,
                 this::updateProgress,
-                this::updatePhase);
+                this::updatePhase,
+                this::appendError);
 
         service.fetchProjects(projectIds)
                 .thenAccept(commits -> SwingUtilities.invokeLater(() -> {
@@ -370,8 +388,9 @@ public class MainWindow extends JFrame {
                         progressBar.setIndeterminate(false);
                         progressBar.setString("Ошибка");
                         phaseLabel.setText("");
-                        statusLabel.setText("Ошибка: " +
-                                (ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage()));
+                        String msg = ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage();
+                        statusLabel.setText("Ошибка: " + msg);
+                        appendError("[ERR] " + msg);
                         setOutputTitle("Лог выполнения");
                         runButton.setEnabled(true);
                     });

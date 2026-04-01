@@ -21,6 +21,7 @@ public class GitLabService {
 
     private final BiConsumer<Integer, Integer> progressCallback;
     private final Consumer<String> phaseCallback;
+    private final Consumer<String> logCallback;
     private final UserResolver userResolver = new UserResolver();
 
     private final AtomicInteger done  = new AtomicInteger(0);
@@ -29,7 +30,8 @@ public class GitLabService {
     public GitLabService(String host, String token, String segment,
                          String since, String until,
                          BiConsumer<Integer, Integer> progressCallback,
-                         Consumer<String> phaseCallback) {
+                         Consumer<String> phaseCallback,
+                         Consumer<String> logCallback) {
         GitLabApi gitLabApi = new GitLabApi(host, token);
         gitLabApi.setIgnoreCertificateErrors(true);
         this.api = gitLabApi;
@@ -39,6 +41,7 @@ public class GitLabService {
         this.until = until;
         this.progressCallback = progressCallback;
         this.phaseCallback = phaseCallback;
+        this.logCallback = logCallback;
     }
 
     public CompletableFuture<List<CommitDetail>> fetchProjects(List<Integer> projectIds) {
@@ -105,14 +108,14 @@ public class GitLabService {
                                             CommitDetail cd = toDetail(detail, segment, projectName, mrBranch);
                                             if (cd != null) unique.put(cd.id(), cd);
                                         } catch (Exception e) {
-                                            System.err.println("Error fetching commit " + sha + ": " + e.getMessage());
+                                            err("Error fetching commit " + sha + ": " + e.getMessage());
                                         } finally {
                                             done.incrementAndGet();
                                             fireProgress();
                                         }
                                     })).toArray(CompletableFuture[]::new)).join();
                         } catch (Exception e) {
-                            System.err.println("Error fetching MR " + mr.getIid() + ": " + e.getMessage());
+                            err("Error fetching MR " + mr.getIid() + ": " + e.getMessage());
                         }
                     }));
                 }
@@ -123,17 +126,12 @@ public class GitLabService {
                 return new ArrayList<>(unique.values());
 
             } catch (Exception e) {
-                System.err.println("Project " + projectId + " error: " + e.getMessage());
+                err("Project " + projectId + " error: " + e.getMessage());
                 return Collections.emptyList();
             }
         });
     }
 
-    /**
-     * Resolves the branch for a direct commit via GitLab Commit Refs API.
-     * Returns the first branch ref found (no filtering — if commit is only in main, returns main).
-     * For MR commits, the source branch is taken directly from the MR object.
-     */
     private String resolveBranch(CommitsApi commitsApi, int projectId, String sha) {
         try {
             List<CommitRef> refs = commitsApi.getCommitRefs(projectId, sha, CommitRef.RefType.BRANCH);
@@ -141,9 +139,14 @@ public class GitLabService {
                 return refs.get(0).getName();
             }
         } catch (Exception e) {
-            System.err.println("resolveBranch " + sha + ": " + e.getMessage());
+            err("resolveBranch " + sha + ": " + e.getMessage());
         }
         return "";
+    }
+
+    private void err(String message) {
+        System.err.println(message);
+        logCallback.accept("[ERR] " + message);
     }
 
     private void fireProgress() {
