@@ -131,19 +131,14 @@ public class GitLabService {
 
     /**
      * Resolves the branch for a direct commit via GitLab Commit Refs API.
-     * Returns the first branch name found, or empty string on failure.
+     * Returns the first branch ref found (no filtering — if commit is only in main, returns main).
      * For MR commits, the source branch is taken directly from the MR object.
      */
     private String resolveBranch(CommitsApi commitsApi, int projectId, String sha) {
         try {
             List<CommitRef> refs = commitsApi.getCommitRefs(projectId, sha, CommitRef.RefType.BRANCH);
             if (refs != null && !refs.isEmpty()) {
-                // Prefer non-default branches (main/master last)
-                return refs.stream()
-                        .map(CommitRef::getName)
-                        .filter(n -> !n.equals("main") && !n.equals("master") && !n.equals("develop"))
-                        .findFirst()
-                        .orElse(refs.get(0).getName());
+                return refs.get(0).getName();
             }
         } catch (Exception e) {
             System.err.println("resolveBranch " + sha + ": " + e.getMessage());
