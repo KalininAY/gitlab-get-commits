@@ -30,7 +30,7 @@ Java 21 + Swing desktop app that fetches GitLab commits for one or multiple proj
   "tokenData": {
     "glpat-...": {
       "host":       ["https://gitlab.example.com"],
-      "segment":    ["My Segment"],
+      "segment":    ["Полигон"],
       "projectIds": ["4139,4747,5549"],
       "since":      ["2025-10-01T00:00:01Z"],
       "until":      ["2025-11-01T00:00:01Z"]
@@ -43,7 +43,7 @@ Values are saved automatically on each "Получить коммиты" click. 
 
 ## Requirements
 
-- Java 21+
+- Java 11+
 
 ## Build & Run
 
