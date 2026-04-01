@@ -38,6 +38,9 @@ public class MainWindow extends JFrame {
     // Holds CSV when done, null while running (log mode)
     private String csvResult = null;
 
+    // Timing
+    private long fetchStartMs = 0;
+
     private ScheduledFuture<?> pendingLookup;
     private final ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r); t.setDaemon(true); return t; });
@@ -111,6 +114,7 @@ public class MainWindow extends JFrame {
         clearButton.setToolTipText("Очистить область результата");
         statusLabel = new JLabel(" ");
         statusLabel.setForeground(new Color(50, 120, 50));
+        statusLabel.setToolTipText("Найдено: коммитов в диапазоне | Просмотрено: всего запрошено коммитов | за: время выполнения");
 
         JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         btnPanel.add(runButton);
@@ -123,7 +127,7 @@ public class MainWindow extends JFrame {
         progressBar.setStringPainted(true);
         progressBar.setString("");
         progressBar.setPreferredSize(new Dimension(0, 22));
-        progressBar.setToolTipText("Прогресс обработки коммитов");
+        progressBar.setToolTipText("Просмотрено / всего коммитов");
 
         phaseLabel = new JLabel("");
         phaseLabel.setFont(phaseLabel.getFont().deriveFont(Font.PLAIN, 11f));
@@ -139,7 +143,7 @@ public class MainWindow extends JFrame {
         outputArea = new JTextArea();
         outputArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         outputArea.setLineWrap(false);
-        outputArea.setToolTipText("Во время выполнения: лог запросов. После завершения: CSV с колонками id;segment;name;date;time;message;author;additions;deletions;branch");
+        outputArea.setToolTipText("Во время выполнения: лог запросов. После завершения: CSV");
         outputScroll = new JScrollPane(outputArea);
         outputScroll.setBorder(BorderFactory.createTitledBorder("Результат (CSV)"));
         outputScroll.setToolTipText("Колонки CSV: id;segment;name;date;time;message;author;additions;deletions;branch");
@@ -230,6 +234,19 @@ public class MainWindow extends JFrame {
     private void updatePhase(String phase) {
         appendLog(phase);
         SwingUtilities.invokeLater(() -> phaseLabel.setText(phase));
+    }
+
+    // -----------------------------------------------------------------------
+    // Timing helper
+    // -----------------------------------------------------------------------
+
+    /** Formats elapsed milliseconds as HH:MM:SS */
+    private static String formatElapsed(long ms) {
+        long totalSec = ms / 1000;
+        long h = totalSec / 3600;
+        long m = (totalSec % 3600) / 60;
+        long s = totalSec % 60;
+        return String.format("%02d:%02d:%02d", h, m, s);
     }
 
     // -----------------------------------------------------------------------
@@ -345,6 +362,7 @@ public class MainWindow extends JFrame {
 
         // UI reset → log mode
         csvResult = null;
+        fetchStartMs = System.currentTimeMillis();
         runButton.setEnabled(false);
         copyButton.setEnabled(false);
         outputArea.setText("");
@@ -366,15 +384,20 @@ public class MainWindow extends JFrame {
 
         service.fetchProjects(projectIds)
                 .thenAccept(commits -> SwingUtilities.invokeLater(() -> {
-                    int n = commits.size();
+                    long elapsed = System.currentTimeMillis() - fetchStartMs;
+                    int found    = commits.size();
+                    int reviewed = progressBar.getMaximum();
+
                     progressBar.setIndeterminate(false);
-                    progressBar.setMaximum(Math.max(1, progressBar.getMaximum()));
-                    progressBar.setValue(progressBar.getMaximum());
-                    progressBar.setString("Готово — " + n + " коммитов");
+                    progressBar.setMaximum(Math.max(1, reviewed));
+                    progressBar.setValue(reviewed);
+                    progressBar.setString("Готово");
                     phaseLabel.setText("");
 
-                    if (n == 0) {
-                        statusLabel.setText("Коммитов не найдено");
+                    String timeStr = formatElapsed(elapsed);
+
+                    if (found == 0) {
+                        statusLabel.setText("Найдено: 0  Просмотрено: " + reviewed + "  за  " + timeStr);
                         setOutputTitle("Результат (CSV)");
                     } else {
                         String csv = commits.stream()
@@ -385,7 +408,7 @@ public class MainWindow extends JFrame {
                         csvResult = csv;
                         outputArea.setText(csv);
                         outputArea.setCaretPosition(0);
-                        statusLabel.setText("Найдено: " + n);
+                        statusLabel.setText("Найдено: " + found + "  Просмотрено: " + reviewed + "  за  " + timeStr);
                         setOutputTitle("Результат (CSV)");
                     }
                     runButton.setEnabled(true);
@@ -393,11 +416,12 @@ public class MainWindow extends JFrame {
                 }))
                 .exceptionally(ex -> {
                     SwingUtilities.invokeLater(() -> {
+                        long elapsed = System.currentTimeMillis() - fetchStartMs;
                         progressBar.setIndeterminate(false);
                         progressBar.setString("Ошибка");
                         phaseLabel.setText("");
                         String msg = ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage();
-                        statusLabel.setText("Ошибка: " + msg);
+                        statusLabel.setText("Ошибка за " + formatElapsed(elapsed) + ": " + msg);
                         appendError("[ERR] " + msg);
                         setOutputTitle("Лог выполнения");
                         runButton.setEnabled(true);
