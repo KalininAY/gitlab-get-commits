@@ -35,7 +35,7 @@ public class GitLabClient {
     public CompletableFuture<List<CommitDetail>> fetchAllCommits() {
         Map<String, CommitDetail> uniqueCommits = new ConcurrentHashMap<>();
 
-        // Branch 1: commits by date range
+        // Branch 1: commits by date range — branch resolved via refs API
         CompletableFuture<Void> branch1 = fetchJson(
                 "/api/v4/projects/" + projectId + "/repository/commits?per_page=100&since=" + since + "&until=" + until + "&all=true"
         ).thenCompose(listNode -> {
@@ -44,16 +44,20 @@ public class GitLabClient {
                 for (JsonNode commit : listNode) {
                     String id = commit.path("id").asText();
                     if (!id.isEmpty()) {
-                        futures.add(fetchCommitDetail(id).thenAccept(detail -> {
-                            if (detail != null) uniqueCommits.put(detail.id(), detail);
-                        }));
+                        futures.add(
+                            fetchBranch(id).thenCompose(branch ->
+                                fetchCommitDetail(id, branch).thenAccept(detail -> {
+                                    if (detail != null) uniqueCommits.put(detail.id(), detail);
+                                })
+                            )
+                        );
                     }
                 }
             }
             return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
         });
 
-        // Branch 2: commits from merge requests
+        // Branch 2: commits from merge requests — branch = MR source_branch
         CompletableFuture<Void> branch2 = fetchJson(
                 "/api/v4/projects/" + projectId + "/merge_requests?per_page=100"
         ).thenCompose(mrListNode -> {
@@ -61,6 +65,7 @@ public class GitLabClient {
             if (mrListNode.isArray()) {
                 for (JsonNode mr : mrListNode) {
                     int iid = mr.path("iid").asInt();
+                    String mrBranch = mr.path("source_branch").asText("");
                     if (iid > 0) {
                         mrFutures.add(
                             fetchJson("/api/v4/projects/" + projectId + "/merge_requests/" + iid + "/commits?per_page=100")
@@ -70,7 +75,7 @@ public class GitLabClient {
                                     for (JsonNode commit : commitList) {
                                         String cid = commit.path("id").asText();
                                         if (!cid.isEmpty()) {
-                                            cFutures.add(fetchCommitDetail(cid).thenAccept(detail -> {
+                                            cFutures.add(fetchCommitDetail(cid, mrBranch).thenAccept(detail -> {
                                                 if (detail != null) uniqueCommits.put(detail.id(), detail);
                                             }));
                                         }
@@ -89,7 +94,22 @@ public class GitLabClient {
                 .thenApply(v -> new ArrayList<>(uniqueCommits.values()));
     }
 
-    private CompletableFuture<CommitDetail> fetchCommitDetail(String id) {
+    /** Resolves branch for a direct commit via Commit Refs API. */
+    private CompletableFuture<String> fetchBranch(String sha) {
+        return fetchJson("/api/v4/projects/" + projectId + "/repository/commits/" + sha + "/refs?type=branch")
+                .thenApply(refs -> {
+                    if (!refs.isArray() || refs.isEmpty()) return "";
+                    // Prefer non-default branches
+                    for (JsonNode ref : refs) {
+                        String n = ref.path("name").asText("");
+                        if (!n.equals("main") && !n.equals("master") && !n.equals("develop")) return n;
+                    }
+                    return refs.get(0).path("name").asText("");
+                })
+                .exceptionally(ex -> "");
+    }
+
+    private CompletableFuture<CommitDetail> fetchCommitDetail(String id, String branch) {
         return fetchJson("/api/v4/projects/" + projectId + "/repository/commits/" + id)
                 .thenApply(node -> {
                     if (node.isMissingNode() || node.isNull()) return null;
@@ -99,7 +119,8 @@ public class GitLabClient {
                     int additions = node.path("stats").path("additions").asInt(0);
                     int deletions = node.path("stats").path("deletions").asInt(0);
                     String committer = node.path("committer_name").asText("");
-                    return new CommitDetail(id, committedDate, message, committer, additions, deletions, segment, name);
+                    return new CommitDetail(id, committedDate, message, committer,
+                            additions, deletions, segment, name, branch);
                 });
     }
 
@@ -117,7 +138,7 @@ public class GitLabClient {
 
     private String cleanMessage(String msg) {
         return msg
-                .replaceAll("Merge branch '[^']+' into '[^']+'\\n+", "")
+                .replaceAll("Merge branch '[^']+' into '[^']+'", "")
                 .replaceAll("\\n+See merge request .+", "")
                 .trim();
     }
