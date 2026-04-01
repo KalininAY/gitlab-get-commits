@@ -28,6 +28,7 @@ public class MainWindow extends JFrame {
     private final HistoryComboBox untilCombo;
 
     private final JTextArea    outputArea;
+    private final JScrollPane  outputScroll;
     private final JButton      runButton;
     private final JButton      copyButton;
     private final JLabel       statusLabel;
@@ -58,11 +59,18 @@ public class MainWindow extends JFrame {
         sinceCombo      = new HistoryComboBox(config.getList(firstToken, "since"),      "2025-10-01T00:00:01Z");
         untilCombo      = new HistoryComboBox(config.getList(firstToken, "until"),      "2025-11-01T00:00:01Z");
 
+        tokenCombo.setToolTipText("Персональный токен доступа GitLab (glpat-...)");
+        hostCombo.setToolTipText("Базовый URL GitLab-сервера, например: http://10.1.5.6");
+        segmentCombo.setToolTipText("Название сегмента для первой колонки CSV");
+        projectIdsCombo.setToolTipText("Числовые ID проектов через запятую, например: 153, 114");
+        sinceCombo.setToolTipText("Начало диапазона в формате ISO 8601, например: 2025-10-01T00:00:01Z");
+        untilCombo.setToolTipText("Конец диапазона в формате ISO 8601, например: 2025-11-01T00:00:01Z");
+
         projectNamesField = new JTextField("");
         projectNamesField.setEditable(false);
         projectNamesField.setForeground(new Color(80, 80, 80));
         projectNamesField.setFont(projectNamesField.getFont().deriveFont(Font.BOLD));
-        projectNamesField.setToolTipText("Имена проектов разрешаются автоматически");
+        projectNamesField.setToolTipText("Имена проектов разрешаются автоматически по ID из GitLab");
 
         // When token changes — reload all other combos
         tokenCombo.addItemListener(e -> {
@@ -84,13 +92,13 @@ public class MainWindow extends JFrame {
         JPanel form = new JPanel(new GridBagLayout());
         form.setBorder(new EmptyBorder(12, 12, 8, 12));
         int row = 0;
-        addRow(form, row++, "Token:",                       tokenCombo);
-        addRow(form, row++, "GitLab Host:",                 hostCombo);
-        addRow(form, row++, "Segment:",                     segmentCombo);
-        addRow(form, row++, "Project IDs (через запятую):",  projectIdsCombo);
-        addRow(form, row++, "Project Names:",                projectNamesField);
-        addRow(form, row++, "Since (ISO 8601):",             sinceCombo);
-        addRow(form, row++, "Until (ISO 8601):",             untilCombo);
+        addRow(form, row++, "Token:",                       tokenCombo,        "Персональный токен доступа GitLab (glpat-...)");
+        addRow(form, row++, "GitLab Host:",                 hostCombo,         "Базовый URL сервера, например: http://10.1.5.6");
+        addRow(form, row++, "Segment:",                     segmentCombo,      "Название сегмента для первой колонки CSV");
+        addRow(form, row++, "Project IDs (через запятую):",  projectIdsCombo,   "Числовые ID проектов, например: 153, 114");
+        addRow(form, row++, "Project Names:",                projectNamesField, "Имена проектов разрешаются автоматически по ID из GitLab");
+        addRow(form, row++, "Since (ISO 8601):",             sinceCombo,        "Начало диапазона, например: 2025-10-01T00:00:01Z");
+        addRow(form, row++, "Until (ISO 8601):",             untilCombo,        "Конец диапазона, например: 2025-11-01T00:00:01Z");
 
         scheduleNameLookup();
 
@@ -98,6 +106,9 @@ public class MainWindow extends JFrame {
         runButton  = new JButton("Получить коммиты");
         copyButton = new JButton("Скопировать");
         JButton clearButton = new JButton("Очистить");
+        runButton.setToolTipText("Запросить коммиты из GitLab по заданным параметрам и сохранить настройки");
+        copyButton.setToolTipText("Скопировать содержимое области результата в буфер обмена");
+        clearButton.setToolTipText("Очистить область результата");
         statusLabel = new JLabel(" ");
         statusLabel.setForeground(new Color(50, 120, 50));
 
@@ -112,10 +123,12 @@ public class MainWindow extends JFrame {
         progressBar.setStringPainted(true);
         progressBar.setString("");
         progressBar.setPreferredSize(new Dimension(0, 22));
+        progressBar.setToolTipText("Прогресс обработки коммитов");
 
         phaseLabel = new JLabel("");
         phaseLabel.setFont(phaseLabel.getFont().deriveFont(Font.PLAIN, 11f));
         phaseLabel.setForeground(new Color(100, 100, 100));
+        phaseLabel.setToolTipText("Текущая фаза загрузки");
 
         JPanel progressPanel = new JPanel(new BorderLayout(6, 0));
         progressPanel.add(progressBar, BorderLayout.CENTER);
@@ -126,14 +139,17 @@ public class MainWindow extends JFrame {
         outputArea = new JTextArea();
         outputArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         outputArea.setLineWrap(false);
-        JScrollPane scroll = new JScrollPane(outputArea);
-        scroll.setBorder(BorderFactory.createTitledBorder("Результат (CSV)"));
+        outputArea.setToolTipText("Во время выполнения: лог запросов. После завершения: CSV с колонками id;segment;name;date;time;message;author;additions;deletions;branch");
+        outputScroll = new JScrollPane(outputArea);
+        outputScroll.setBorder(BorderFactory.createTitledBorder("Результат (CSV)"));
+        outputScroll.setToolTipText("Колонки CSV: id;segment;name;date;time;message;author;additions;deletions;branch");
 
         runButton.addActionListener(e  -> runFetch());
         copyButton.addActionListener(e -> copyToClipboard());
         clearButton.addActionListener(e -> {
             csvResult = null;
             outputArea.setText("");
+            outputArea.getHighlighter().removeAllHighlights();
             statusLabel.setText(" ");
             setOutputTitle("Результат (CSV)");
         });
@@ -144,8 +160,8 @@ public class MainWindow extends JFrame {
         top.add(btnPanel,      BorderLayout.SOUTH);
 
         setLayout(new BorderLayout(0, 4));
-        add(top,    BorderLayout.NORTH);
-        add(scroll, BorderLayout.CENTER);
+        add(top,          BorderLayout.NORTH);
+        add(outputScroll, BorderLayout.CENTER);
 
         pack();
         setLocationRelativeTo(null);
@@ -156,16 +172,10 @@ public class MainWindow extends JFrame {
     // -----------------------------------------------------------------------
 
     private void setOutputTitle(String title) {
-        Container parent = outputArea.getParent();
-        while (parent != null && !(parent instanceof JScrollPane)) parent = parent.getParent();
-        if (parent instanceof JScrollPane) {
-            JScrollPane sp = (JScrollPane) parent;
-            Border border = sp.getBorder();
-            if (border instanceof TitledBorder) {
-                TitledBorder tb = (TitledBorder) border;
-                tb.setTitle(title);
-                sp.repaint();
-            }
+        Border border = outputScroll.getBorder();
+        if (border instanceof TitledBorder) {
+            ((TitledBorder) border).setTitle(title);
+            outputScroll.repaint();
         }
     }
 
@@ -186,11 +196,9 @@ public class MainWindow extends JFrame {
             if (csvResult != null) return;
             int pos = outputArea.getDocument().getLength();
             outputArea.append(line + "\n");
-            // Colour the error line red
             outputArea.setCaretPosition(outputArea.getDocument().getLength());
-            javax.swing.text.Highlighter h = outputArea.getHighlighter();
             try {
-                h.addHighlight(pos, pos + line.length(),
+                outputArea.getHighlighter().addHighlight(pos, pos + line.length(),
                         new javax.swing.text.DefaultHighlighter.DefaultHighlightPainter(
                                 new Color(255, 220, 220)));
             } catch (javax.swing.text.BadLocationException ignored) {}
@@ -415,7 +423,10 @@ public class MainWindow extends JFrame {
         statusLabel.setText("Скопировано в буфер обмена");
     }
 
-    private void addRow(JPanel panel, int row, String labelText, JComponent field) {
+    private void addRow(JPanel panel, int row, String labelText, JComponent field, String tooltip) {
+        JLabel label = new JLabel(labelText);
+        label.setToolTipText(tooltip);
+
         GridBagConstraints lc = new GridBagConstraints();
         lc.gridx = 0; lc.gridy = row;
         lc.anchor = GridBagConstraints.EAST;
@@ -427,7 +438,7 @@ public class MainWindow extends JFrame {
         fc.weightx = 1.0;
         fc.insets = new Insets(4, 0, 4, 4);
 
-        panel.add(new JLabel(labelText), lc);
+        panel.add(label, lc);
         panel.add(field, fc);
     }
 }
