@@ -15,6 +15,7 @@ public final class CommitDetail {
     private final int deletions;
     private final String segment;
     private final String projectName;
+    private final String branch;
 
     public CommitDetail(
             String id,
@@ -24,7 +25,8 @@ public final class CommitDetail {
             int additions,
             int deletions,
             String segment,
-            String projectName
+            String projectName,
+            String branch
     ) {
         this.id = id;
         this.committedDate = committedDate;
@@ -34,6 +36,7 @@ public final class CommitDetail {
         this.deletions = deletions;
         this.segment = segment;
         this.projectName = projectName;
+        this.branch = branch;
     }
 
     public String toCsvRow() {
@@ -45,73 +48,35 @@ public final class CommitDetail {
         }
         String safeMsg = message.replace(";", ",").replace("\n", " ").trim();
         return String.join(";",
-                id, segment, projectName, formattedDate, safeMsg, authorEmail,
+                id, segment, projectName, branch, formattedDate, safeMsg, authorEmail,
                 String.valueOf(additions), String.valueOf(deletions));
     }
 
-    public String id() {
-        return id;
-    }
-
-    public String committedDate() {
-        return committedDate;
-    }
-
-    public String message() {
-        return message;
-    }
-
-    public String authorEmail() {
-        return authorEmail;
-    }
-
-    public int additions() {
-        return additions;
-    }
-
-    public int deletions() {
-        return deletions;
-    }
-
-    public String segment() {
-        return segment;
-    }
-
-    public String projectName() {
-        return projectName;
-    }
+    public String id()            { return id; }
+    public String committedDate() { return committedDate; }
+    public String message()       { return message; }
+    public String authorEmail()   { return authorEmail; }
+    public int    additions()     { return additions; }
+    public int    deletions()     { return deletions; }
+    public String segment()       { return segment; }
+    public String projectName()   { return projectName; }
+    public String branch()        { return branch; }
 
     @Override
     public boolean equals(Object obj) {
         if (obj == this) return true;
         if (obj == null || obj.getClass() != this.getClass()) return false;
-        var that = (CommitDetail) obj;
-        return Objects.equals(this.id, that.id) &&
-                Objects.equals(this.committedDate, that.committedDate) &&
-                Objects.equals(this.message, that.message) &&
-                Objects.equals(this.authorEmail, that.authorEmail) &&
-                this.additions == that.additions &&
-                this.deletions == that.deletions &&
-                Objects.equals(this.segment, that.segment) &&
-                Objects.equals(this.projectName, that.projectName);
+        CommitDetail that = (CommitDetail) obj;
+        return Objects.equals(this.id, that.id);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, committedDate, message, authorEmail, additions, deletions, segment, projectName);
+        return Objects.hash(id);
     }
 
     @Override
     public String toString() {
-        return "CommitDetail[" +
-                "id=" + id + ", " +
-                "committedDate=" + committedDate + ", " +
-                "message=" + message + ", " +
-                "authorEmail=" + authorEmail + ", " +
-                "additions=" + additions + ", " +
-                "deletions=" + deletions + ", " +
-                "segment=" + segment + ", " +
-                "projectName=" + projectName + ']';
+        return "CommitDetail[id=" + id + ", project=" + projectName + ", branch=" + branch + "]";
     }
-
 }

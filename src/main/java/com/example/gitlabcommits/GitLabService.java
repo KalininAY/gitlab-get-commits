@@ -14,14 +14,12 @@ import java.util.stream.Collectors;
 public class GitLabService {
 
     private final GitLabApi api;
-    private final String cacheKey;  // "host|token" for UserResolver
+    private final String cacheKey;
     private final String segment;
     private final String since;
     private final String until;
 
-    /** (done, total) — both numbers grow over time */
     private final BiConsumer<Integer, Integer> progressCallback;
-    /** Text phase label shown next to the numbers */
     private final Consumer<String> phaseCallback;
     private final UserResolver userResolver = new UserResolver();
 
@@ -32,15 +30,8 @@ public class GitLabService {
                          String since, String until,
                          BiConsumer<Integer, Integer> progressCallback,
                          Consumer<String> phaseCallback) {
-        GitLabApi gitLabApi;
-        try {
-            // Disable SSL verification for self-signed / corporate CA certificates
-            gitLabApi = new GitLabApi(host, token);
-            gitLabApi.setIgnoreCertificateErrors(true);
-        } catch (Exception e) {
-            // fallback — should not happen
-            gitLabApi = new GitLabApi(host, token);
-        }
+        GitLabApi gitLabApi = new GitLabApi(host, token);
+        gitLabApi.setIgnoreCertificateErrors(true);
         this.api = gitLabApi;
         this.cacheKey = host + "|" + token;
         this.segment = segment;
@@ -84,25 +75,25 @@ public class GitLabService {
                 total.addAndGet(directCommits.size());
                 fireProgress();
                 for (Commit c : directCommits) {
-                    CommitDetail cd = toDetail(c, segment, projectName);
+                    String branch = resolveBranch(commitsApi, projectId, c.getId());
+                    CommitDetail cd = toDetail(c, segment, projectName, branch);
                     if (cd != null) unique.put(cd.id(), cd);
                     done.incrementAndGet();
                     fireProgress();
                 }
 
-                // ── Phase 2: MR commits (parallel per MR) ───────────────────────
+                // ── Phase 2: MR commits ──────────────────────────────────────────
                 phaseCallback.accept("[" + projectName + "] MR-списки...");
                 List<MergeRequest> mrs = api.getMergeRequestApi()
                         .getMergeRequests(projectId, Constants.MergeRequestState.ALL, 1, 100);
 
                 List<CompletableFuture<Void>> allMrFutures = new ArrayList<>();
-
                 for (MergeRequest mr : mrs) {
+                    final String mrBranch = mr.getSourceBranch() != null ? mr.getSourceBranch() : "";
                     allMrFutures.add(CompletableFuture.runAsync(() -> {
                         try {
                             List<Commit> mrCommits = api.getMergeRequestApi()
                                     .getCommits(projectId, mr.getIid(), 1, 100);
-
                             total.addAndGet(mrCommits.size());
                             fireProgress();
 
@@ -111,7 +102,7 @@ public class GitLabService {
                                     .map(sha -> CompletableFuture.runAsync(() -> {
                                         try {
                                             Commit detail = commitsApi.getCommit(projectId, sha);
-                                            CommitDetail cd = toDetail(detail, segment, projectName);
+                                            CommitDetail cd = toDetail(detail, segment, projectName, mrBranch);
                                             if (cd != null) unique.put(cd.id(), cd);
                                         } catch (Exception e) {
                                             System.err.println("Error fetching commit " + sha + ": " + e.getMessage());
@@ -138,11 +129,33 @@ public class GitLabService {
         });
     }
 
+    /**
+     * Resolves the branch for a direct commit via GitLab Commit Refs API.
+     * Returns the first branch name found, or empty string on failure.
+     * For MR commits, the source branch is taken directly from the MR object.
+     */
+    private String resolveBranch(CommitsApi commitsApi, int projectId, String sha) {
+        try {
+            List<CommitRef> refs = commitsApi.getCommitRefs(projectId, sha, CommitRef.RefType.BRANCH);
+            if (refs != null && !refs.isEmpty()) {
+                // Prefer non-default branches (main/master last)
+                return refs.stream()
+                        .map(CommitRef::getName)
+                        .filter(n -> !n.equals("main") && !n.equals("master") && !n.equals("develop"))
+                        .findFirst()
+                        .orElse(refs.get(0).getName());
+            }
+        } catch (Exception e) {
+            System.err.println("resolveBranch " + sha + ": " + e.getMessage());
+        }
+        return "";
+    }
+
     private void fireProgress() {
         progressCallback.accept(done.get(), total.get());
     }
 
-    private CommitDetail toDetail(Commit c, String segment, String projectName) {
+    private CommitDetail toDetail(Commit c, String segment, String projectName, String branch) {
         if (c == null || c.getCommittedDate() == null) return null;
         String dateStr = c.getCommittedDate().toInstant().toString();
         if (!isTimeBound(dateStr)) return null;
@@ -164,14 +177,14 @@ public class GitLabService {
         return new CommitDetail(
                 c.getId(), dateStr, msg,
                 author(username),
-                additions, deletions, segment, projectName);
+                additions, deletions, segment, projectName, branch);
     }
 
-    private String author(String email) {
-        if (email == null || email.isBlank()) return "";
-        int pos = email.indexOf('@');
-        if (pos > -1) email = email.substring(0, pos);
-        return email;
+    private String author(String name) {
+        if (name == null || name.isBlank()) return "";
+        int pos = name.indexOf('@');
+        if (pos > -1) name = name.substring(0, pos);
+        return name;
     }
 
     private boolean isTimeBound(String dateStr) {
