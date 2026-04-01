@@ -44,6 +44,10 @@ public class GitLabService {
         this.logCallback = logCallback;
     }
 
+    // -----------------------------------------------------------------------
+    // Public entry point
+    // -----------------------------------------------------------------------
+
     public CompletableFuture<List<CommitDetail>> fetchProjects(List<Integer> projectIds) {
         List<CompletableFuture<List<CommitDetail>>> futures = projectIds.stream()
                 .map(this::fetchProject)
@@ -59,85 +63,137 @@ public class GitLabService {
                 });
     }
 
-    private CompletableFuture<List<CommitDetail>> fetchProject(int projectId) {
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                Project project = api.getProjectApi().getProject(projectId);
-                String projectName = project.getName();
-                Map<String, CommitDetail> unique = new ConcurrentHashMap<>();
-                CommitsApi commitsApi = api.getCommitsApi();
-                Date sinceDate = Date.from(Instant.parse(since));
-                Date untilDate = Date.from(Instant.parse(until));
+    // -----------------------------------------------------------------------
+    // Per-project pipeline
+    //
+    // Step 1 (async): resolve project name
+    // Step 2 (async): fetch list of direct commits  ─┐  run in parallel
+    //                 fetch list of MRs              ─┘
+    // Step 3 (async × N): for each direct commit   ─┐  all in parallel
+    //          per MR (async × M):                  │
+    //            fetch MR commit list               │
+    //            then async × K per commit detail   ─┘
+    // -----------------------------------------------------------------------
 
-                // ── Phase 1: direct commits ──────────────────────────────────────
-                phaseCallback.accept("[" + projectName + "] прямые коммиты...");
-                List<Commit> directCommits = commitsApi.getCommits(
+    private CompletableFuture<List<CommitDetail>> fetchProject(int projectId) {
+        ConcurrentHashMap<String, CommitDetail> unique = new ConcurrentHashMap<>();
+        CommitsApi commitsApi = api.getCommitsApi();
+        Date sinceDate = Date.from(Instant.parse(since));
+        Date untilDate = Date.from(Instant.parse(until));
+
+        // Step 1: resolve name
+        CompletableFuture<String> nameFuture = CompletableFuture.supplyAsync(() -> {
+            try {
+                return api.getProjectApi().getProject(projectId).getName();
+            } catch (Exception e) {
+                err("Cannot resolve project name " + projectId + ": " + e.getMessage());
+                return "#" + projectId;
+            }
+        });
+
+        // Step 2a: fetch direct commit list (depends on name for phase label)
+        CompletableFuture<List<Commit>> directListFuture = nameFuture.thenApplyAsync(name -> {
+            try {
+                phaseCallback.accept("[" + name + "] прямые коммиты...");
+                List<Commit> list = commitsApi.getCommits(
                         projectId, null, sinceDate, untilDate, null,
                         Boolean.TRUE, Boolean.TRUE, Boolean.FALSE
                 );
-                total.addAndGet(directCommits.size());
+                total.addAndGet(list.size());
                 fireProgress();
-                for (Commit c : directCommits) {
-                    String branch = resolveBranch(commitsApi, projectId, c.getId());
-                    CommitDetail cd = toDetail(c, segment, projectName, branch);
-                    if (cd != null) unique.put(cd.id(), cd);
-                    done.incrementAndGet();
-                    fireProgress();
-                }
+                return list;
+            } catch (Exception e) {
+                err("Direct commits error [" + projectId + "]: " + e.getMessage());
+                return Collections.emptyList();
+            }
+        });
 
-                // ── Phase 2: MR commits ──────────────────────────────────────────
-                phaseCallback.accept("[" + projectName + "] MR-списки...");
-                List<MergeRequest> mrs = api.getMergeRequestApi()
+        // Step 2b: fetch MR list (depends on name for phase label, runs in parallel with 2a)
+        CompletableFuture<List<MergeRequest>> mrListFuture = nameFuture.thenApplyAsync(name -> {
+            try {
+                phaseCallback.accept("[" + name + "] MR-список...");
+                return api.getMergeRequestApi()
                         .getMergeRequests(projectId, Constants.MergeRequestState.ALL, 1, 100);
+            } catch (Exception e) {
+                err("MR list error [" + projectId + "]: " + e.getMessage());
+                return Collections.emptyList();
+            }
+        });
 
-                List<CompletableFuture<Void>> allMrFutures = new ArrayList<>();
-                for (MergeRequest mr : mrs) {
-                    final String mrBranch = mr.getSourceBranch() != null ? mr.getSourceBranch() : "";
-                    allMrFutures.add(CompletableFuture.runAsync(() -> {
+        // Step 3a: process direct commits — each in its own runAsync
+        CompletableFuture<Void> directFuture = directListFuture.thenCompose(directCommits -> {
+            String name = nameFuture.join(); // already done at this point
+            List<CompletableFuture<Void>> tasks = directCommits.stream()
+                    .map(c -> CompletableFuture.runAsync(() -> {
                         try {
+                            String branch = resolveBranch(commitsApi, projectId, c.getId());
+                            CommitDetail cd = toDetail(c, segment, name, branch);
+                            if (cd != null) unique.put(cd.id(), cd);
+                        } catch (Exception e) {
+                            err("Direct commit detail error " + c.getId() + ": " + e.getMessage());
+                        } finally {
+                            done.incrementAndGet();
+                            fireProgress();
+                        }
+                    }))
+                    .collect(Collectors.toList());
+            return CompletableFuture.allOf(tasks.toArray(new CompletableFuture[0]));
+        });
+
+        // Step 3b: for each MR — fetch its commits list, then detail each in parallel
+        CompletableFuture<Void> mrFuture = mrListFuture.thenCompose(mrs -> {
+            String name = nameFuture.join(); // already done
+            List<CompletableFuture<Void>> mrTasks = mrs.stream()
+                    .map(mr -> CompletableFuture.supplyAsync(() -> {
+                        // fetch commit list for this MR
+                        try {
+                            String branch = mr.getSourceBranch() != null ? mr.getSourceBranch() : "";
                             List<Commit> mrCommits = api.getMergeRequestApi()
                                     .getCommits(projectId, mr.getIid(), 1, 100);
                             total.addAndGet(mrCommits.size());
                             fireProgress();
-
-                            CompletableFuture.allOf(mrCommits.stream()
-                                    .map(Commit::getId)
-                                    .map(sha -> CompletableFuture.runAsync(() -> {
-                                        try {
-                                            Commit detail = commitsApi.getCommit(projectId, sha);
-                                            CommitDetail cd = toDetail(detail, segment, projectName, mrBranch);
-                                            if (cd != null) unique.put(cd.id(), cd);
-                                        } catch (Exception e) {
-                                            err("Error fetching commit " + sha + ": " + e.getMessage());
-                                        } finally {
-                                            done.incrementAndGet();
-                                            fireProgress();
-                                        }
-                                    })).toArray(CompletableFuture[]::new)).join();
+                            return new AbstractMap.SimpleEntry<>(branch, mrCommits);
                         } catch (Exception e) {
-                            err("Error fetching MR " + mr.getIid() + ": " + e.getMessage());
+                            err("MR commits error MR#" + mr.getIid() + ": " + e.getMessage());
+                            return new AbstractMap.SimpleEntry<>("", Collections.<Commit>emptyList());
                         }
-                    }));
-                }
-
-                phaseCallback.accept("[" + projectName + "] детали коммитов...");
-                CompletableFuture.allOf(allMrFutures.toArray(new CompletableFuture[0])).join();
-
-                return new ArrayList<>(unique.values());
-
-            } catch (Exception e) {
-                err("Project " + projectId + " error: " + e.getMessage());
-                return Collections.emptyList();
-            }
+                    }).thenCompose(entry -> {
+                        // detail each commit in this MR in parallel
+                        String branch   = entry.getKey();
+                        List<Commit> cs = entry.getValue();
+                        List<CompletableFuture<Void>> detailTasks = cs.stream()
+                                .map(c -> CompletableFuture.runAsync(() -> {
+                                    try {
+                                        Commit detail = commitsApi.getCommit(projectId, c.getId());
+                                        CommitDetail cd = toDetail(detail, segment, name, branch);
+                                        if (cd != null) unique.put(cd.id(), cd);
+                                    } catch (Exception e) {
+                                        err("MR commit detail error " + c.getId() + ": " + e.getMessage());
+                                    } finally {
+                                        done.incrementAndGet();
+                                        fireProgress();
+                                    }
+                                }))
+                                .collect(Collectors.toList());
+                        return CompletableFuture.allOf(detailTasks.toArray(new CompletableFuture[0]));
+                    }))
+                    .collect(Collectors.toList());
+            return CompletableFuture.allOf(mrTasks.toArray(new CompletableFuture[0]));
         });
+
+        // Combine 3a + 3b, then collect results
+        return CompletableFuture.allOf(directFuture, mrFuture)
+                .thenApply(v -> new ArrayList<>(unique.values()));
     }
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
 
     private String resolveBranch(CommitsApi commitsApi, int projectId, String sha) {
         try {
             List<CommitRef> refs = commitsApi.getCommitRefs(projectId, sha, CommitRef.RefType.BRANCH);
-            if (refs != null && !refs.isEmpty()) {
-                return refs.get(0).getName();
-            }
+            if (refs != null && !refs.isEmpty()) return refs.get(0).getName();
         } catch (Exception e) {
             err("resolveBranch " + sha + ": " + e.getMessage());
         }
@@ -159,7 +215,7 @@ public class GitLabService {
         if (!isTimeBound(dateStr)) return null;
 
         String msg = c.getMessage() == null ? "" : c.getMessage()
-                .replaceAll("Merge branch '[^']+' into '[^']+'", "")
+                .replaceAll("Merge branch '[^']+' into '[^']+'\n+", "")
                 .replaceAll("\\n+See merge request .+", "")
                 .replaceAll("\\n{2,}", "\n")
                 .trim();
@@ -171,7 +227,6 @@ public class GitLabService {
         }
 
         String username = userResolver.resolve(api, cacheKey, c.getAuthorName());
-
         return new CommitDetail(
                 c.getId(), dateStr, msg,
                 author(username),
