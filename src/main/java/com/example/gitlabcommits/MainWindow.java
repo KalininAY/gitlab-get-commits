@@ -62,13 +62,6 @@ public class MainWindow extends JFrame {
         sinceCombo      = new HistoryComboBox(config.getList(firstToken, "since"),      "2025-10-01T00:00:01Z");
         untilCombo      = new HistoryComboBox(config.getList(firstToken, "until"),      "2025-11-01T00:00:01Z");
 
-        tokenCombo.setToolTipText("Персональный токен доступа GitLab (glpat-...)");
-        hostCombo.setToolTipText("Базовый URL GitLab-сервера, например: http://10.1.5.6");
-        segmentCombo.setToolTipText("Название сегмента для первой колонки CSV");
-        projectIdsCombo.setToolTipText("Числовые ID проектов через запятую, например: 153, 114");
-        sinceCombo.setToolTipText("Начало диапазона в формате ISO 8601, например: 2025-10-01T00:00:01Z");
-        untilCombo.setToolTipText("Конец диапазона в формате ISO 8601, например: 2025-11-01T00:00:01Z");
-
         projectNamesField = new JTextField("");
         projectNamesField.setEditable(false);
         projectNamesField.setForeground(new Color(80, 80, 80));
@@ -97,8 +90,8 @@ public class MainWindow extends JFrame {
         int row = 0;
         addRow(form, row++, "Token:",                       tokenCombo,        "Персональный токен доступа GitLab (glpat-...)");
         addRow(form, row++, "GitLab Host:",                 hostCombo,         "Базовый URL сервера, например: http://10.1.5.6");
-        addRow(form, row++, "Segment:",                     segmentCombo,      "Название сегмента для первой колонки CSV");
-        addRow(form, row++, "Project IDs (через запятую):",  projectIdsCombo,   "Числовые ID проектов, например: 153, 114");
+        addRow(form, row++, "Segment:",                     segmentCombo,      "Например, Полигон или ВБИ");
+        addRow(form, row++, "Project IDs (через запятую):",  projectIdsCombo,   "ID проектов через запятую, например: 153, 114. Можно найти на странице проекта");
         addRow(form, row++, "Project Names:",                projectNamesField, "Имена проектов разрешаются автоматически по ID из GitLab");
         addRow(form, row++, "Since (ISO 8601):",             sinceCombo,        "Начало диапазона, например: 2025-10-01T00:00:01Z");
         addRow(form, row++, "Until (ISO 8601):",             untilCombo,        "Конец диапазона, например: 2025-11-01T00:00:01Z");
@@ -114,7 +107,7 @@ public class MainWindow extends JFrame {
         clearButton.setToolTipText("Очистить область результата");
         statusLabel = new JLabel(" ");
         statusLabel.setForeground(new Color(50, 120, 50));
-        statusLabel.setToolTipText("Найдено: коммитов в диапазоне | Просмотрено: всего запрошено коммитов | за: время выполнения");
+        statusLabel.setToolTipText("Найдено: коммитов в диапазоне | Просмотрено: всего запрошено коммитов | за: время выполнения HH:mm:ss");
 
         JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         btnPanel.add(runButton);
@@ -146,7 +139,7 @@ public class MainWindow extends JFrame {
         outputArea.setToolTipText("Во время выполнения: лог запросов. После завершения: CSV");
         outputScroll = new JScrollPane(outputArea);
         outputScroll.setBorder(BorderFactory.createTitledBorder("Результат (CSV)"));
-        outputScroll.setToolTipText("Колонки CSV: id;segment;name;date;time;message;author;additions;deletions;branch");
+        outputScroll.setToolTipText("Колонки CSV: <sha>;<segment>;<project_name>;<branch>;<DD.MM.YYYY>;<HH:mm:ss>;<message>;<author>;<additions>;<deletions>");
 
         runButton.addActionListener(e  -> runFetch());
         copyButton.addActionListener(e -> copyToClipboard());

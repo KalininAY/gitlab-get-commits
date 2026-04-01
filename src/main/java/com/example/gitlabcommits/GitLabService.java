@@ -14,12 +14,14 @@ import java.util.stream.Collectors;
 public class GitLabService {
 
     private final GitLabApi api;
-    private final String cacheKey;
+    private final String cacheKey;  // "host|token" for UserResolver
     private final String segment;
     private final String since;
     private final String until;
 
+    /** (done, total) — both numbers grow over time */
     private final BiConsumer<Integer, Integer> progressCallback;
+    /** Text phase label shown next to the numbers */
     private final Consumer<String> phaseCallback;
     private final Consumer<String> logCallback;
     private final UserResolver userResolver = new UserResolver();
@@ -197,7 +199,7 @@ public class GitLabService {
         } catch (Exception e) {
             err("resolveBranch " + sha + ": " + e.getMessage());
         }
-        return "";
+        return "*undefined*";
     }
 
     private void err(String message) {
@@ -210,9 +212,12 @@ public class GitLabService {
     }
 
     private CommitDetail toDetail(Commit c, String segment, String projectName, String branch) {
-        if (c == null || c.getCommittedDate() == null) return null;
+        if (c == null || c.getCommittedDate() == null)
+            return null;
+
         String dateStr = c.getCommittedDate().toInstant().toString();
-        if (!isTimeBound(dateStr)) return null;
+        if (!isTimeBound(dateStr))
+            return null;
 
         String msg = c.getMessage() == null ? "" : c.getMessage()
                 .replaceAll("Merge branch '[^']+' into '[^']+'\n+", "")
